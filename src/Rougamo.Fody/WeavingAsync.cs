@@ -5,6 +5,7 @@ using Fody.Simulations.PlainValues;
 using Fody.Simulations.Types;
 using Mono.Cecil.Cil;
 using Mono.Cecil;
+using Rougamo.Context;
 using Rougamo.Fody.Contexts;
 using Rougamo.Fody.Simulations.Types;
 using System;
@@ -43,10 +44,10 @@ namespace Rougamo.Fody
 
                 stateMachineTypeDef = AsyncBuildStateMachine(rouMethod.MethodDef);
                 AsyncBuildSetupMethod(rouMethod.MethodDef, stateMachineTypeDef);
+                DebuggerStepThrough(rouMethod.MethodDef);
                 buildSetStateMachine = true;
             }
 
-            using var _ = _config.ChangeMoArrayThresholdTemporarily(int.MaxValue);
             var fields = AsyncResolveFields(rouMethod, stateMachineTypeDef);
             AsyncSetAbsentFields(rouMethod, stateMachineTypeDef, fields);
             StateMachineFieldCleanup(stateMachineTypeDef, fields);
@@ -62,15 +63,8 @@ namespace Rougamo.Fody
             var mMoveNext = tStateMachine.M_MoveNext;
             mMoveNext.Def.Clear();
 
-            if (tStateMachine.F_MoArray == null)
-            {
-                AsyncBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod);
-            }
-            else
-            {
-                AsyncBuildMoArrayMoveNext(rouMethod, tStateMachine, mActualMethod);
-            }
-
+            AsyncBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod);
+            StackTraceHidden(mMoveNext.Def);
             DebuggerStepThrough(mMoveNext.Def);
             mMoveNext.Def.Body.InitLocals = true;
             mMoveNext.Def.Body.OptimizePlus();
@@ -93,122 +87,151 @@ namespace Rougamo.Fody
             var vPersistentInnerException = vInnerException == null || context.OnExceptionAllInSync && context.OnExitAllInSync ? null : mMoveNext.CreateVariable(_tExceptionRef);
 
             Instruction? outerTryStart = null, outerCatchStart = null, outerCatchEnd = null, innerTryStart = null, innerCatchStart = null, innerCatchEnd = Create(OpCodes.Nop);
+            Instruction poolFinallyStart = Create(OpCodes.Nop), poolFinallyEnd = Create(OpCodes.Nop), poolingEnd = Create(OpCodes.Nop);
             var switches = Create(OpCodes.Switch, []);
+
+            var pooledItems = new List<IParameterSimulation> { tStateMachine.F_MethodContext };
 
             // .var state = _state;
             instructions.Add(vState.Assign(tStateMachine.F_State));
 
             // .try
             {
-                // .switch (state)
-                outerTryStart = instructions.AddGetFirst(vState.Load());
-                instructions.Add(switches);
+                // .try
                 {
-                    // ._mo = new Mo1Attribute(..);
-                    instructions.Add(StateMachineInitMos(rouMethod, tStateMachine));
-                    // ._context = new MethodContext(..);
-                    instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine));
-                    // ._mo.OnEntry(_context); <--> _mo.OnEntryAsync(_context).GetAwaiter()...
-                    instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, context, Feature.OnEntry, ForceSync.OnEntry, fMo => fMo.Value.M_OnEntry, fMo => fMo.Value.M_OnEntryAsync));
+                    // .switch (state)
+                    outerTryStart = instructions.AddGetFirst(vState.Load());
+                    instructions.Add(switches);
+                    {
+                        // ._mo = new Mo1Attribute(..);
+                        instructions.Add(StateMachineInitMos(rouMethod, tStateMachine, pooledItems));
+                        // ._context = new MethodContext(..);
+                        instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine));
+                        // ._mo.OnEntry(_context); <--> _mo.OnEntryAsync(_context).GetAwaiter()...
+                        instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnEntry, ForceSync.OnEntry, fMo => fMo.Value.M_OnEntry, fMo => fMo.Value.M_OnEntryAsync));
 
-                    // .if (_context.ReturnValueReplaced) { ... }
-                    instructions.Add(AsyncIfOnEntryReplacedReturn(rouMethod, tStateMachine, context));
-                    // .if (_context.RewriteArguments) { ... }
-                    instructions.Add(StateMachineIfRewriteArguments(rouMethod, tStateMachine));
-                    // .RETRY:
-                    instructions.Add(context.AnchorProxyCallCase);
-                    context.AnchorSwitches.Add(context.AnchorProxyCallCase);
-                    if (vPersistentInnerException != null)
-                    {
-                        instructions.Add(vPersistentInnerException.AssignDefault());
-                    }
-                    // .try
-                    {
-                        // .ActualMethod(...).GetAwaiter()...
-                        innerTryStart = instructions.AddGetFirst(AsyncProxyCall(rouMethod, tStateMachine, vState, vAwaiter, mActualMethod, context));
-                        // ._result = awaiter.GetResult(); _context.ReturnValue = _result;
-                        instructions.Add(AsyncSaveResult(rouMethod, tStateMachine, vAwaiter));
-                        if (vInnerException != null)
-                        {
-                            instructions.Add(Create(OpCodes.Leave, innerCatchEnd));
-                        }
-                    }
-                    // .catch (Exception innerException)
-                    if (vInnerException != null)
-                    {
-                        innerCatchStart = instructions.AddGetFirst(vInnerException.Assign(target => []));
+                        // .if (_context.ReturnValueReplaced) { ... }
+                        instructions.Add(AsyncIfOnEntryReplacedReturn(rouMethod, tStateMachine, context));
+                        // .if (_context.RewriteArguments) { ... }
+                        instructions.Add(StateMachineIfRewriteArguments(rouMethod, tStateMachine));
+                        // .RETRY:
+                        instructions.Add(context.AnchorProxyCallCase);
+                        context.AnchorSwitches.Add(context.AnchorProxyCallCase);
                         if (vPersistentInnerException != null)
                         {
-                            // persistentInnerException = innerException;
-                            instructions.Add(vPersistentInnerException.Assign(vInnerException));
-                            instructions.Add(Create(OpCodes.Leave, innerCatchEnd));
+                            instructions.Add(vPersistentInnerException.AssignDefault());
                         }
-                        else
+                        // .try
                         {
-                            // ._context.Exception = innerException;
-                            instructions.Add(tStateMachine.F_MethodContext.Value.P_Exception.Assign(vInnerException));
-                            // ._mo.OnException(_context);
-                            instructions.Add(StateMachineSyncMosNo(rouMethod, tStateMachine, Feature.OnException, mo => mo.M_OnException));
-                            // // .if (_context.RetryCount > 0) goto RETRY;
-                            instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnException, vState, true));
+                            // .ActualMethod(...).GetAwaiter()...
+                            innerTryStart = instructions.AddGetFirst(AsyncProxyCall(rouMethod, tStateMachine, vState, vAwaiter, mActualMethod, context));
+                            // ._result = awaiter.GetResult(); _context.ReturnValue = _result;
+                            instructions.Add(AsyncSaveResult(rouMethod, tStateMachine, vAwaiter));
+                            if (vInnerException != null)
+                            {
+                                instructions.Add(Create(OpCodes.Leave, innerCatchEnd));
+                            }
+                        }
+                        // .catch (Exception innerException)
+                        if (vInnerException != null)
+                        {
+                            innerCatchStart = instructions.AddGetFirst(vInnerException.Assign(target => []));
+                            if (vPersistentInnerException != null)
+                            {
+                                // persistentInnerException = innerException;
+                                instructions.Add(vPersistentInnerException.Assign(vInnerException));
+                                instructions.Add(Create(OpCodes.Leave, innerCatchEnd));
+                            }
+                            else
+                            {
+                                // ._context.Exception = innerException;
+                                instructions.Add(tStateMachine.F_MethodContext.Value.P_Exception.Assign(vInnerException));
+                                // ._mo.OnException(_context);
+                                instructions.Add(StateMachineSyncMosNo(rouMethod, tStateMachine, Feature.OnException, mo => mo.M_OnException));
+                                // // .if (_context.RetryCount > 0) goto RETRY;
+                                instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnException, vState, true));
+                                // .if (exceptionHandled) _result = _context.ReturnValue;
+                                instructions.Add(AsyncSaveResultIfExceptionHandled(rouMethod, tStateMachine, ref vExceptionHandled));
+                                // ._mo.OnExit(_context);
+                                instructions.Add(StateMachineSyncMosNo(rouMethod, tStateMachine, Feature.OnExit, mo => mo.M_OnExit));
+                                // .if (exceptionHandled) goto END;
+                                instructions.Add(AsyncMosReturnIfExceptionHandled(rouMethod, tStateMachine, context, vExceptionHandled));
+                                // throw;
+                                instructions.Add(Create(OpCodes.Rethrow));
+                            }
+
+                            instructions.Add(innerCatchEnd);
+                        }
+                        if (vPersistentInnerException != null)
+                        {
+                            // .if (persistentInnerException != null)
+                            instructions.Add(vPersistentInnerException.IsEqual(new Null(this)).IfNot(anchor =>
+                            {
+                                return [
+                                    // ._context.Exception = persistentInnerException;
+                                    .. tStateMachine.F_MethodContext.Value.P_Exception.Assign(vPersistentInnerException),
+                                    // .goto ON_EXCEPTION;
+                                    Create(OpCodes.Br, context.AnchorOnExceptionAsync)
+                                ];
+                            }));
+                        }
+                        // ._mo.OnSuccessAsync(_context).GetAwaiter(); ...
+                        instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnSuccess, ForceSync.OnSuccess, fMo => fMo.Value.M_OnSuccess, fMo => fMo.Value.M_OnSuccessAsync));
+                        // .if (_context.RetryCount > 0) continue;
+                        instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnSuccess, vState, false));
+                        // .if (_context.ReturnValueReplaced) _result = _context.ReturnValue;
+                        instructions.Add(AsyncSaveResultIfReplaced(rouMethod, tStateMachine));
+                        // .ON_EXIT
+                        instructions.Add(context.AnchorOnExitAsync);
+                        // ._mo.OnExitAsync(_context).GetAwaiter(); ...
+                        instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnExit, ForceSync.OnExit, fMo => fMo.Value.M_OnExit, fMo => fMo.Value.M_OnExitAsync));
+
+                        if (vPersistentInnerException != null)
+                        {
+                            // .if (!exceptionHandled) ExceptionDispatchInfo.Capture(persistentInnerException).Throw();
+                            instructions.Add(AsyncThrowIfExceptionNotHandled(rouMethod, tStateMachine, vPersistentInnerException, ref vExceptionHandled));
+                        }
+                        // goto END;
+                        instructions.Add(Create(OpCodes.Leave, context.AnchorSetResult));
+
+                        if (vPersistentInnerException != null)
+                        {
+                            // .ON_EXCEPTION
+                            instructions.Add(context.AnchorOnExceptionAsync);
+                            // ._mo.OnExceptionAsync(_context).GetAwaiter(); ...
+                            instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnException, ForceSync.OnException, fMo => fMo.Value.M_OnException, fMo => fMo.Value.M_OnExceptionAsync));
+                            // .if (_context.RetryCount > 0) continue;
+                            instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnException, vState, false));
                             // .if (exceptionHandled) _result = _context.ReturnValue;
                             instructions.Add(AsyncSaveResultIfExceptionHandled(rouMethod, tStateMachine, ref vExceptionHandled));
-                            // ._mo.OnExit(_context);
-                            instructions.Add(StateMachineSyncMosNo(rouMethod, tStateMachine, Feature.OnExit, mo => mo.M_OnExit));
-                            // .if (exceptionHandled) goto END;
-                            instructions.Add(AsyncMosReturnIfExceptionHandled(rouMethod, tStateMachine, context, vExceptionHandled));
-                            // throw;
-                            instructions.Add(Create(OpCodes.Rethrow));
+                            // .goto ON_EXIT;
+                            instructions.Add(Create(OpCodes.Br, context.AnchorOnExitAsync));
                         }
-
-                        instructions.Add(innerCatchEnd);
-                    }
-                    if (vPersistentInnerException != null)
-                    {
-                        // .if (persistentInnerException != null)
-                        instructions.Add(vPersistentInnerException.IsEqual(new Null(this)).IfNot(anchor =>
-                        {
-                            return [
-                                // ._context.Exception = persistentInnerException;
-                                .. tStateMachine.F_MethodContext.Value.P_Exception.Assign(vPersistentInnerException),
-                                // .goto ON_EXCEPTION;
-                                Create(OpCodes.Br, context.AnchorOnExceptionAsync)
-                            ];
-                        }));
-                    }
-                    // ._mo.OnSuccessAsync(_context).GetAwaiter(); ...
-                    instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, context, Feature.OnSuccess, ForceSync.OnSuccess, fMo => fMo.Value.M_OnSuccess, fMo => fMo.Value.M_OnSuccessAsync));
-                    // .if (_context.RetryCount > 0) continue;
-                    instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnSuccess, vState, false));
-                    // .if (_context.ReturnValueReplaced) _result = _context.ReturnValue;
-                    instructions.Add(AsyncSaveResultIfReplaced(rouMethod, tStateMachine));
-                    // .ON_EXIT
-                    instructions.Add(context.AnchorOnExitAsync);
-                    // ._mo.OnExitAsync(_context).GetAwaiter(); ...
-                    instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, context, Feature.OnExit, ForceSync.OnExit, fMo => fMo.Value.M_OnExit, fMo => fMo.Value.M_OnExitAsync));
-
-                    if (vPersistentInnerException != null)
-                    {
-                        // .if (!exceptionHandled) ExceptionDispatchInfo.Capture(persistentInnerException).Throw();
-                        instructions.Add(AsyncThrowIfExceptionNotHandled(rouMethod, tStateMachine, vPersistentInnerException, ref vExceptionHandled));
-                    }
-                    // goto END;
-                    instructions.Add(Create(OpCodes.Leave, context.AnchorSetResult));
-
-                    if (vPersistentInnerException != null)
-                    {
-                        // .ON_EXCEPTION
-                        instructions.Add(context.AnchorOnExceptionAsync);
-                        // ._mo.OnExceptionAsync(_context).GetAwaiter(); ...
-                        instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, context, Feature.OnException, ForceSync.OnException, fMo => fMo.Value.M_OnException, fMo => fMo.Value.M_OnExceptionAsync));
-                        // .if (_context.RetryCount > 0) continue;
-                        instructions.Add(AsynCheckRetry(rouMethod, tStateMachine, context, Feature.OnException, vState, false));
-                        // .if (exceptionHandled) _result = _context.ReturnValue;
-                        instructions.Add(AsyncSaveResultIfExceptionHandled(rouMethod, tStateMachine, ref vExceptionHandled));
-                        // .goto ON_EXIT;
-                        instructions.Add(Create(OpCodes.Br, context.AnchorOnExitAsync));
                     }
                 }
+                // .finally
+                {
+                    instructions.Add(poolFinallyStart);
+
+                    // .if (state >= 0) goto POOLING_END;
+                    instructions.Add(vState.Lt(0).IfNot(_ => [Create(OpCodes.Br, poolingEnd)]));
+
+                    foreach (var pooledItem in pooledItems)
+                    {
+                        // .if (pooledItem != null)
+                        instructions.Add(pooledItem.IsNull().IfNot(_ => [
+                            // .RougamoPool<..>.Return(..);
+                            .. ReturnToPool(pooledItem, mMoveNext),
+                            // .pooledItem = null;
+                            .. ((FieldSimulation)pooledItem).AssignDefault()
+                        ]));
+                    }
+
+                    instructions.Add(poolingEnd);
+                    instructions.Add(Create(OpCodes.Endfinally));
+                    instructions.Add(poolFinallyEnd);
+                }
+                instructions.Add(Create(OpCodes.Leave, context.AnchorSetResult));
             }
             // .catch (Exception exception)
             {
@@ -234,12 +257,8 @@ namespace Rougamo.Fody
             switches.Operand = context.AnchorSwitches.ToArray();
 
             SetTryCatch(mMoveNext.Def, innerTryStart, innerCatchStart, innerCatchEnd);
+            SetTryFinally(mMoveNext.Def, outerTryStart, poolFinallyStart, poolFinallyEnd);
             SetTryCatch(mMoveNext.Def, outerTryStart, outerCatchStart, outerCatchEnd);
-        }
-
-        private void AsyncBuildMoArrayMoveNext(RouMethod rouMethod, TsAsyncStateMachine tStateMachine, MethodSimulation<TsAwaitable> mActualMethod)
-        {
-            throw new NotImplementedException($"Currently, async methods are not allowed to use array to save the Mos. Contact the author to get support.");
         }
 
         private MethodSimulation<T> StateMachineResolveActualMethod<T>(TsStateMachine tStateMachine, MethodDefinition actualMethodDef) where T : TypeSimulation
@@ -270,7 +289,7 @@ namespace Rougamo.Fody
             return new TsWeavingTarget(declaringTypeRef, null, this);
         }
 
-        private IList<Instruction> StateMachineInitMos(RouMethod rouMethod, TsStateMachine tStateMachine)
+        private IList<Instruction> StateMachineInitMos(RouMethod rouMethod, TsStateMachine tStateMachine, List<IParameterSimulation> pooledItems)
         {
             var instructions = new List<Instruction>();
 
@@ -278,7 +297,7 @@ namespace Rougamo.Fody
             {
                 var mo = rouMethod.Mos[i];
                 var fMo = tStateMachine.F_Mos![i];
-                instructions.Add(fMo.Assign(target => fMo.Value.New(tStateMachine.M_MoveNext, mo)));
+                instructions.Add(fMo.Assign(target => NewMo(rouMethod, mo, fMo.Value, tStateMachine.M_MoveNext, pooledItems)));
             }
 
             return instructions;
@@ -286,19 +305,36 @@ namespace Rougamo.Fody
 
         private IList<Instruction> StateMachineInitMethodContext(RouMethod rouMethod, TsStateMachine tStateMachine)
         {
-            var tMoArray = _tIMoArrayRef.Simulate<TsArray>(this);
-            var tObjectArray = _tObjectArrayRef.Simulate<TsArray>(this);
-            IParameterSimulation?[] arguments = [
-                tStateMachine.F_DeclaringThis?.Typed(_simulations.Object),
-                new SystemType(rouMethod.MethodDef.DeclaringType, this),
-                new SystemMethodBase(rouMethod.MethodDef, this),
-                rouMethod.MethodContextOmits.Contains(Omit.Mos) ? tMoArray.Null() : tMoArray.NewAsPlainValue(tStateMachine.F_Mos!),
-                rouMethod.MethodContextOmits.Contains(Omit.Arguments) ? tObjectArray.Null() : tObjectArray.NewAsPlainValue(tStateMachine.F_Parameters)
-            ];
-            return tStateMachine.F_MethodContext.AssignNew(tStateMachine.M_MoveNext, arguments);
+            var instructions = new List<Instruction>();
+
+            // ._context = RougamoPool<MethodContext>.Get();
+            instructions.AddRange(AssignByPool(tStateMachine.F_MethodContext, tStateMachine.M_MoveNext));
+            // ._context.Mos = new Mo[] { ... };
+            if (!rouMethod.MethodContextOmits.Contains(Omit.Mos))
+            {
+                var tMoArray = _tIMoArrayRef.Simulate<TsArray>(this);
+                instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Mos.Assign(tMoArray.NewAsPlainValue(tStateMachine.F_Mos!)));
+            }
+            // ._context.Target = <>4__this;
+            if (tStateMachine.F_DeclaringThis != null)
+            {
+                instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Target.Assign(tStateMachine.F_DeclaringThis.Typed(_simulations.Object)));
+            }
+            // ._context.TargetType = typeof(TARGET_TYPE);
+            instructions.AddRange(tStateMachine.F_MethodContext.Value.P_TargetType.Assign(new SystemType(rouMethod.MethodDef.DeclaringType, this)));
+            // ._context.Method = methodof(TARGET_METHOD);
+            instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, this)));
+            // ._context.Arguments = new object[] { ... };
+            if (!rouMethod.MethodContextOmits.Contains(Omit.Arguments))
+            {
+                var tObjectArray = _tObjectArrayRef.Simulate<TsArray>(this);
+                instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Arguments.Assign(tObjectArray.NewAsPlainValue(tStateMachine.F_Parameters)));
+            }
+            
+            return instructions;
         }
 
-        private IList<Instruction> AsyncAwaitMoAwaiterIfNeed(RouMethod rouMethod, IAsyncStateMachine tStateMachine, VariableSimulation<TsAwaiter> vMoAwaiter, IAsyncContext context)
+        private IList<Instruction> AsyncAwaitMoAwaiterIfNeed(RouMethod rouMethod, IAsyncStateMachine tStateMachine, VariableSimulation<TsAwaiter> vMoAwaiter, VariableSimulation vState, IAsyncContext context)
         {
             if (!context.AwaitFirst) return [];
 
@@ -307,6 +343,8 @@ namespace Rougamo.Fody
 
             Instruction[] instructions = [
                 .. assignAwaiterInsts,
+                // .state = -1;
+                .. vState.Assign(-1),
                 context.AnchorStateReady,
                 // .moAwaiter.GetResult();
                 .. vMoAwaiter.Value.M_GetResult.Call(tStateMachine.M_MoveNext)
@@ -383,8 +421,12 @@ namespace Rougamo.Fody
             // .if (state == STATE)
             return vState.IsEqual(new Int32Value(context.State, this)).If((a1, a2) =>
             {
-                // .awaiter = _awaiter;
-                return vAwaiter.Assign(tStateMachine.F_Awaiter);
+                return [
+                    // .awaiter = _awaiter;
+                    .. vAwaiter.Assign(tStateMachine.F_Awaiter),
+                    // .state = -1;
+                    .. vState.Assign(-1)
+                ];
             }, (a1, a2) =>
             {// .else (state != STATE)
                 Instruction[] callAssignAwaiter;
@@ -409,14 +451,17 @@ namespace Rougamo.Fody
                 return [
                     .. callAssignAwaiter,
                     // .if (!awaiter.IsCompleted) { ... }
-                    .. AsyncIsAwaiterCompleted(tStateMachine, tStateMachine.F_Awaiter, vAwaiter, context)
+                    .. AsyncIsAwaiterCompleted(tStateMachine, tStateMachine.F_Awaiter, vAwaiter, vState, context)
                 ];
             });
         }
 
-        private IList<Instruction> AsyncIsAwaiterCompleted(IAsyncStateMachine tStateMachine, FieldSimulation<TsAwaiter> fAwaiter, VariableSimulation<TsAwaiter> vAwaiter, IAsyncContext context)
+        private IList<Instruction> AsyncIsAwaiterCompleted(IAsyncStateMachine tStateMachine, FieldSimulation<TsAwaiter> fAwaiter, VariableSimulation<TsAwaiter> vAwaiter, VariableSimulation vState, IAsyncContext context)
         {
+            // .if (!awaiter.IsCompleted)
             return vAwaiter.Value.P_IsCompleted.IfNot(anchor => [
+                // .state = STATE;
+                .. vState.Assign(context.State),
                 // ._state = STATE++;
                 .. tStateMachine.F_State.Assign(context.State++),
                 // ._awaiter = awaiter;
@@ -540,11 +585,11 @@ namespace Rougamo.Fody
             });
         }
 
-        private IList<Instruction> AsyncMosOn(RouMethod rouMethod, IAsyncStateMachine tStateMachine, VariableSimulation<TsAwaitable> vMoValueTask, VariableSimulation<TsAwaiter> vMoAwaiter, IAsyncContext context, Feature feature, ForceSync forceSync, Func<FieldSimulation<TsMo>, MethodSimulation> syncMethodFactory, Func<FieldSimulation<TsMo>, MethodSimulation<TsAwaitable>> asyncMethodFactory)
+        private IList<Instruction> AsyncMosOn(RouMethod rouMethod, IAsyncStateMachine tStateMachine, VariableSimulation<TsAwaitable> vMoValueTask, VariableSimulation<TsAwaiter> vMoAwaiter, VariableSimulation vState, IAsyncContext context, Feature feature, ForceSync forceSync, Func<FieldSimulation<TsMo>, MethodSimulation> syncMethodFactory, Func<FieldSimulation<TsMo>, MethodSimulation<TsAwaitable>> asyncMethodFactory)
         {
             if (!rouMethod.Features.Contains(feature)) return [];
 
-            var reverseCall = feature != Feature.OnEntry && _config.ReverseCallNonEntry;
+            var reverseCall = feature != Feature.OnEntry && Configuration.ReverseCallNonEntry;
 
             var instructions = new List<Instruction>();
 
@@ -555,7 +600,7 @@ namespace Rougamo.Fody
                 var mo = rouMethod.Mos[j];
                 if (!mo.Features.Contains(feature)) continue;
 
-                instructions.Add(AsyncAwaitMoAwaiterIfNeed(rouMethod, tStateMachine, vMoAwaiter, context));
+                instructions.Add(AsyncAwaitMoAwaiterIfNeed(rouMethod, tStateMachine, vMoAwaiter, vState, context));
 
                 var fMo = tStateMachine.F_Mos![j];
                 if (mo.ForceSync.Contains(forceSync))
@@ -571,22 +616,36 @@ namespace Rougamo.Fody
                     // .moAwaiter = moValueTask.GetAwaiter();
                     instructions.Add(vMoAwaiter.Assign(target => vMoValueTask.Value.M_GetAwaiter.Call(tStateMachine.M_MoveNext)));
                     // .if (!moAwaiter.IsCompleted) { ... }
-                    instructions.Add(AsyncIsAwaiterCompleted(tStateMachine, tStateMachine.F_MoAwaiter, vMoAwaiter, context));
+                    instructions.Add(AsyncIsAwaiterCompleted(tStateMachine, tStateMachine.F_MoAwaiter, vMoAwaiter, vState, context));
                     // goto NEXT_STATE;
                     instructions.Add(Create(OpCodes.Br, context.GetNextStateReadyAnchor()));
                     context.AwaitFirst = true;
                 }
             }
 
-            instructions.Add(AsyncAwaitMoAwaiterIfNeed(rouMethod, tStateMachine, vMoAwaiter, context));
+            instructions.Add(AsyncAwaitMoAwaiterIfNeed(rouMethod, tStateMachine, vMoAwaiter, vState, context));
 
             return instructions;
         }
 
         private IList<Instruction> StateMachineSyncMosNo(RouMethod rouMethod, TsStateMachine tStateMachine, Feature feature, Func<TsMo, MethodSimulation> methodFactory)
         {
-            return SyncMosOn(rouMethod, tStateMachine.M_MoveNext, tStateMachine.F_MethodContext, tStateMachine.F_Mos?.Select(x => x.Value).ToArray(), tStateMachine.F_MoArray?.Value, feature, methodFactory);
+            return SyncMosOn(rouMethod, tStateMachine.M_MoveNext, tStateMachine.F_MethodContext, tStateMachine.F_Mos.Select(x => x.Value).ToArray(), feature, methodFactory);
         }
+
+        //private IList<Instruction> StateMachineAssignByPool(FieldSimulation field, MethodSimulation executionMethod)
+        //{
+        //    var tPool = _tPoolRef.MakeGenericInstanceType(field.Type).Simulate(this);
+        //    var mGet = _mPoolGetRef.Simulate(tPool);
+        //    return field.Assign(target => mGet.Call(executionMethod));
+        //}
+
+        //private IList<Instruction> StateMachineReturnToPool(FieldSimulation field, MethodSimulation executionMethod)
+        //{
+        //    var tPool = _tPoolRef.MakeGenericInstanceType(field.Type).Simulate(this);
+        //    var mReturn = _mPoolReturnRef.Simulate(tPool);
+        //    return mReturn.Call(executionMethod, field);
+        //}
 
         private TypeDefinition AsyncBuildStateMachine(MethodDefinition methodDef)
         {
@@ -602,7 +661,7 @@ namespace Rougamo.Fody
             var attribute = TypeAttributes.NestedPrivate | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit;
             var baseTypeRef = _debugMode ? _tObjectRef : _tValueTypeRef;
             // #77. 这里的类名由于本身不需要调试所以暂时不按官方的命名来，如果后续需要，将类名改为 $"<{methodDef.Name}>d__{methodDef.DeclaringType.Methods.Count - 1}" 即可
-            var stateMachineTypeDef = new TypeDefinition(methodDef.DeclaringType.Namespace, $"<{methodDef.Name}>r__{map.Count}", attribute, baseTypeRef);
+            var stateMachineTypeDef = new TypeDefinition(string.Empty, $"<{methodDef.Name}>r__{map.Count}", attribute, baseTypeRef);
             stateMachineTypeDef.Interfaces.Add(new(_tIAsyncStateMachineRef));
             stateMachineTypeDef.DeclaringType = methodDef.DeclaringType;
             methodDef.DeclaringType.NestedTypes.Add(stateMachineTypeDef);
@@ -763,21 +822,11 @@ namespace Rougamo.Fody
             var resultTypeRef = awaiterTypeRef.GetMethod(Constants.METHOD_GetResult, false).ReturnType;
             resultTypeRef = awaiterTypeRef.Import(resultTypeRef);
 
-            FieldDefinition? moArray = null;
-            var mos = new FieldDefinition[0];
-            if (rouMethod.Mos.Length >= _config.MoArrayThreshold)
+            var mos = new FieldDefinition[rouMethod.Mos.Length];
+            for (int i = 0; i < rouMethod.Mos.Length; i++)
             {
-                moArray = new FieldDefinition(Constants.FIELD_RougamoMos, FieldAttributes.Public, _tIMoArrayRef);
-                stateMachineTypeDef.AddUniqueField(moArray);
-            }
-            else
-            {
-                mos = new FieldDefinition[rouMethod.Mos.Length];
-                for (int i = 0; i < rouMethod.Mos.Length; i++)
-                {
-                    mos[i] = new FieldDefinition(Constants.FIELD_RougamoMo_Prefix + i, FieldAttributes.Public, this.Import(rouMethod.Mos[i].MoTypeRef));
-                    stateMachineTypeDef.AddUniqueField(mos[i]);
-                }
+                mos[i] = new FieldDefinition(Constants.FIELD_RougamoMo_Prefix + i, FieldAttributes.Public, this.Import(rouMethod.Mos[i].MoTypeRef));
+                stateMachineTypeDef.AddUniqueField(mos[i]);
             }
             var methodContext = new FieldDefinition(Constants.FIELD_RougamoContext, FieldAttributes.Public, _tMethodContextRef);
             var awaiter = new FieldDefinition(Constants.FIELD_Awaiter, FieldAttributes.Private, this.Import(awaiterTypeRef));
@@ -794,7 +843,7 @@ namespace Rougamo.Fody
                 .AddUniqueField(moAwaiter)
                 .AddUniqueField(result);
 
-            return new AsyncFields(moArray, mos, methodContext, state, builder, declaringThis, awaiter, moAwaiter, result, parameters);
+            return new AsyncFields(mos, methodContext, state, builder, declaringThis, awaiter, moAwaiter, result, parameters);
         }
 
         private FieldDefinition?[] StateMachineParameterFields(RouMethod rouMethod)

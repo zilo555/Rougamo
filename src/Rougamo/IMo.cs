@@ -9,36 +9,6 @@ namespace Rougamo
     public interface IMo
     {
         /// <summary>
-        /// Weavable method type, this attribute has no effect when applied at the method level.
-        /// </summary>
-        AccessFlags Flags { get; }
-
-        /// <summary>
-        /// Method matched with this pattern will be weaving. This attribute has no effect when applied at the method level. It has a higher priority than <see cref="Flags"/>
-        /// </summary>
-        string? Pattern { get; }
-
-        /// <summary>
-        /// Which features will be weaving.
-        /// </summary>
-        Feature Features { get; }
-
-        /// <summary>
-        /// Execution order.
-        /// </summary>
-        double Order { get; }
-
-        /// <summary>
-        /// If you declare a struct that implment IMo, then you can use this property to minimize boxing operation.
-        /// </summary>
-        Omit MethodContextOmits { get; }
-
-        /// <summary>
-        /// Which methods should be executed synchronously in an async method
-        /// </summary>
-        ForceSync ForceSync { get; }
-
-        /// <summary>
         /// Before the method executing.
         /// </summary>
         void OnEntry(MethodContext context);

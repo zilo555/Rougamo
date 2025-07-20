@@ -6,18 +6,6 @@ namespace IndirectDependency1.Mos
 {
     public struct Id1ValueMo : IMo
     {
-        public AccessFlags Flags => AccessFlags.InstancePublic;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.All;
-
-        public double Order => 0;
-
-        public Omit MethodContextOmits => Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public void OnEntry(MethodContext context)
         {
             this.SetOnEntry(context);
@@ -62,18 +50,6 @@ namespace IndirectDependency1.Mos
 
     public struct Id1ValueMo<T> : IMo
     {
-        public AccessFlags Flags => AccessFlags.InstancePublic;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.All;
-
-        public double Order => 0;
-
-        public Omit MethodContextOmits => Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public void OnEntry(MethodContext context)
         {
             this.SetOnEntry(context);

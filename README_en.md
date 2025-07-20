@@ -1,7 +1,7 @@
 
 # Rougamo - 肉夹馍
 
-[中文](README.md) | English
+[中文](https://github.com/inversionhourglass/Rougamo/blob/master/README.md) | English
 
 ## What is Rougamo
 
@@ -14,13 +14,12 @@ Rougamo, a type of traditional Chinese street food, is somewhat similar to a ham
 ### Rougamo's Advantages and Disadvantages
 
 - **Advantages:**
-  1. **Shorter Application Startup Time:** Static weaving occurs at compile time, whereas dynamic proxies are set up at application startup.
-  2. **Support for All Methods:** Rougamo supports all methods, including constructors, properties, and static methods. Dynamic proxies often only handle instance methods due to their reliance on IoC.
-  3. **Independent from Other Components:** Rougamo does not require initialization and is easy and quick to use. Dynamic AOP relies on IoC components, which often need initialization at application startup and vary between different IoC components. Rougamo does not require initialization; you just define the aspect type and apply it.
+  1. **Shorter Application Startup Time**, Static weaving occurs at compile time, whereas dynamic proxies are set up at application startup.
+  2. **Support for All Methods**, Rougamo supports all methods, including constructors, properties, and static methods. Dynamic proxies often only handle instance methods due to their reliance on IoC.
+  3. **Independent from Other Components**, Rougamo does not require initialization and is easy and quick to use. Dynamic AOP relies on IoC components, which often need initialization at application startup and vary between different IoC components. Rougamo does not require initialization; you just define the aspect type and apply it.
 
 - **Disadvantages:**
-  1. **Larger Assembly Size:** Since Rougamo is a compile-time AOP, it weaves additional code into the assembly at compile time, which increases the assembly size. However, this overhead is generally minimal and can be evaluated in your project through [configuration options](https://github.com/inversionhourglass/Rougamo/wiki/%E9%85%8D%E7%BD%AE%E9%A1%B9).
-  2. **Less Convenient IoC Interaction:** Dynamic AOP can easily access the IoC container and inject types into aspect types due to its reliance on IoC. Rougamo, being a compile-time AOP, does not depend on IoC components and thus cannot directly interact with IoC through methods like constructor injection. However, it can still be used with IoC; see [using IoC in Rougamo](https://github.com/inversionhourglass/Rougamo/wiki/%E5%85%B6%E4%BB%96#%E8%82%89%E5%A4%B9%E9%A6%8D%E4%B8%AD%E4%BD%BF%E7%94%A8IoC) for details.
+  **Larger Assembly Size**, Since Rougamo is a compile-time AOP, it weaves additional code into the assembly at compile time, which increases the assembly size. However, this overhead is generally minimal and can be evaluated in your project through [configuration options](https://github.com/inversionhourglass/Rougamo/wiki/%E9%85%8D%E7%BD%AE%E9%A1%B9).
 
 ## Basic Functionality Introduction
 
@@ -101,6 +100,7 @@ Applying attributes directly to methods is straightforward, but for common AOP t
 1. [Class or assembly-level attributes](https://github.com/inversionhourglass/Rougamo/wiki/%E5%BA%94%E7%94%A8%E6%96%B9%E5%BC%8F#%E7%B1%BB%E6%88%96%E7%A8%8B%E5%BA%8F%E9%9B%86%E7%BA%A7attribute%E5%BA%94%E7%94%A8)
 2. [Low-intrusive implementation of the empty interface IRougamo](https://github.com/inversionhourglass/Rougamo/wiki/%E5%BA%94%E7%94%A8%E6%96%B9%E5%BC%8F#%E5%AE%9E%E7%8E%B0%E7%A9%BA%E6%8E%A5%E5%8F%A3irougamo)
 3. [Specify an attribute as a proxy attribute and apply it to methods with the proxy attribute](https://github.com/inversionhourglass/Rougamo/wiki/%E5%BA%94%E7%94%A8%E6%96%B9%E5%BC%8F#attribute%E4%BB%A3%E7%90%86)
+4. [Non-intrusive configurative weaving method](https://github.com/inversionhourglass/Rougamo/wiki/%E5%BA%94%E7%94%A8%E6%96%B9%E5%BC%8F#%E9%85%8D%E7%BD%AE%E5%8C%96)
 
 When applying attributes in bulk, such as applying `TestAttribute` to a class, you typically don’t want every method in the class to receive `TestAttribute`. Instead, you may want to select methods that meet specific criteria. Rougamo offers two methods for method selection:
 1. [Coarse-grained method feature matching](https://github.com/inversionhourglass/Rougamo/wiki/%E6%96%B9%E6%B3%95%E5%8C%B9%E9%85%8D#%E7%B2%97%E7%B2%92%E5%BA%A6%E7%9A%84%E6%96%B9%E6%B3%95%E7%89%B9%E6%80%A7%E5%8C%B9%E9%85%8D), which allows specifying static, instance, public, private, property, constructor methods, etc.
@@ -137,6 +137,8 @@ Rougamo is a method-level AOP component. When applying Rougamo to methods, it in
 3. **[Slimming MethodContext](https://github.com/inversionhourglass/Rougamo/wiki/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96#%E7%98%A6%E8%BA%ABmethodcontext)**: `MethodContext` holds contextual information about the current method. This information requires additional objects and involves boxing and unboxing operations, such as for method parameters and return values. If you do not need this information, slimming down `MethodContext` can achieve certain optimization effects.
    
 4. **[Forced Synchronization](https://github.com/inversionhourglass/Rougamo/wiki/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96#%E5%BC%BA%E5%88%B6%E5%90%8C%E6%AD%A5)**: As discussed in [Asynchronous Aspects](https://github.com/inversionhourglass/Rougamo/wiki/%E5%BC%82%E6%AD%A5%E5%88%87%E9%9D%A2), asynchronous aspects use `ValueTask` to optimize synchronous execution but still incur additional overhead. If asynchronous operations are not required, forcing synchronous aspects can avoid the extra costs of asynchronous aspects.
+
+5. **[Custom Aspect Type Lifecycle](https://github.com/inversionhourglass/Rougamo/wiki/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96#%E8%87%AA%E5%AE%9A%E4%B9%89%E5%88%87%E9%9D%A2%E7%B1%BB%E5%9E%8B%E5%A3%B0%E6%98%8E%E5%91%A8%E6%9C%9F)**, structs can avoid the creation of reference types, but they also have many limitations themselves, such as being unable to inherit from a parent class to reuse logic, unable to inherit from Attribute which results in an inability to specify parameters when applying aspect types (Attributes can specify constructor and property parameters when applied [Xyz(123, V = "abc")]). A way to balance usability and performance is through custom declaration cycles.
 
 ## Learn More
 

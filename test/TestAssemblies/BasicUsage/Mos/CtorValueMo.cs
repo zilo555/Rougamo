@@ -1,23 +1,13 @@
 ﻿using Rougamo;
 using Rougamo.Context;
+using Rougamo.Metadatas;
 using System.Threading.Tasks;
 
 namespace BasicUsage.Mos
 {
+    [Pointcut(AccessFlags.Constructor | AccessFlags.All)]
     public struct CtorValueMo : IMo
     {
-        public AccessFlags Flags => AccessFlags.Constructor | AccessFlags.All;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.All;
-
-        public double Order => 1;
-
-        public Omit MethodContextOmits => Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public void OnEntry(MethodContext context)
         {
         }

@@ -1,7 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <VersionPrefix>4.0.3</VersionPrefix>
+	<!--
+	    netstandard2.0: 最低兼容版本
+	    netstandard2.1: 包含ValueTask和默认接口方法的netstandard版本
+	     netcoreapp2.1: 包含ValueTask的最低版本
+	     netcoreapp3.0: 包含默认接口方法的最低版本
+	            net6.0: StackTraceHiddenAttribute默认忽略调用堆栈的最低版本
+	-->
+    <TargetFrameworks>netstandard2.0;netstandard2.1;netcoreapp2.1;netcoreapp3.0;net6.0</TargetFrameworks>
+    <VersionPrefix>5.0.1</VersionPrefix>
+    <DefineConstants>TRACE;ROUGAMO</DefineConstants>
     <Authors>ihourglass</Authors>
     <Description>An AOP component that can be applied to any method, whether it is synchronous or asynchronous, instance or static, constructor or property. You can also apply it to types and assemblies, and use an AspectJ-like pattern to match the methods you want.</Description>
     <PackageTags>Rougamo AOP AspectJ Fody IL Cecil PostSharp ILWeaving</PackageTags>
@@ -16,17 +24,30 @@
     <RepositoryType>git</RepositoryType>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <PackageReleaseNotes>$([System.IO.File]::ReadAllText("$(SolutionDir)CHANGELOG.md"))</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(VersionSuffix)' == ''">For details: https://github.com/inversionhourglass/Rougamo/releases/tag/v$(VersionPrefix)</PackageReleaseNotes>
     <PackageReadmeFile>README_en.md</PackageReadmeFile>
+	<TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddAnalyzersToOutput</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
+	
   <ItemGroup>
     <None Include="..\..\Rougamo.png" Pack="true" PackagePath="\" />
     <None Include="..\..\README_en.md" Pack="true" PackagePath="\" />
-    <None Include="..\..\CHANGELOG.md" Pack="true" PackagePath="\" />
+    <None Include="tools\*.ps1" Pack="true" PackagePath="\tools" />
   </ItemGroup>
+	
   <ItemGroup>
     <PackageReference Include="Fody" Version="6.8.1" PrivateAssets="none" />
     <PackageReference Include="FodyPackaging" Version="6.8.1" PrivateAssets="All" />
+  </ItemGroup>
+	
+  <ItemGroup Condition="'$(TargetFramework)'=='netstandard2.0'">
     <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
   </ItemGroup>
+
+  <Target Name="_AddAnalyzersToOutput">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="..\Rougamo.Analyzers\bin\$(Configuration)\netstandard2.0\Rougamo.Analyzers.dll" PackagePath="analyzers/dotnet/cs" />
+    </ItemGroup>
+  </Target>
+	
 </Project>

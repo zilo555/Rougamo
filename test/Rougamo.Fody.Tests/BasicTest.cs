@@ -1,7 +1,6 @@
 using BasicUsage;
 using BasicUsage.Attributes;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -10,108 +9,78 @@ using Xunit;
 
 namespace Rougamo.Fody.Tests
 {
-    [Collection(nameof(BasicUsage))]
-    public class BasicTest : TestBase
+    public partial class BasicTest
     {
-        public BasicTest() : base("BasicUsage.dll")
+        private static readonly WeavedAssembly Assembly;
+
+        static BasicTest()
         {
-        }
-
-        protected override string RootNamespace => "BasicUsage";
-
-        [Fact]
-        public void InstanceSingleMethodTest()
-        {
-            var instance = GetInstance("InstanceSingleMethod");
-            var arrArg = new object[] { Guid.NewGuid(), 1.2, new object() };
-            instance.Entry(1, "2", arrArg);
-            Assert.Equal(instance.Context.Arguments.Length, 3);
-            for (var i = 0; i < arrArg.Length; i++)
-            {
-                Assert.Equal(arrArg[i], instance.Context.Arguments[2][i]);
-            }
-
-            instance.Context = null;
-            Assert.Throws<InvalidOperationException>(() => instance.Exception());
-            Assert.NotNull(instance.Context.Exception);
-            // Combine the following two steps will throws an exception.
-            IDictionary data = instance.Context.Exception.Data;
-            Assert.Equal(1, data.Count);
-
-            instance.Context = null;
-            var successValue = instance.Success();
-            Assert.Equal(successValue, instance.Context.ReturnValue);
-
-            instance.Context = null;
-            Assert.Throws<InvalidOperationException>(() => instance.ExitWithException());
-            Assert.Null(instance.Context.ReturnValue);
-            Assert.NotNull(instance.Context.Exception);
-
-            instance.Context = null;
-            var exitWithSuccessValue = instance.ExitWithSuccess();
-            Assert.Equal(exitWithSuccessValue, instance.Context.ReturnValue);
-            Assert.Null(instance.Context.Exception);
+            //#if NET461
+            //Assembly = new("../../Release/net461/BasicUsage.dll", "BasicUsage");
+            //#elif NET48
+            //Assembly = new("../../Release/net48/BasicUsage.dll", "BasicUsage");
+            //#elif NETCOREAPP3_1
+            //Assembly = new("../../Release/netcoreapp3.1/BasicUsage.dll", "BasicUsage");
+            //#elif NET6_0
+            //Assembly = new("../../Release/net6.0/BasicUsage.dll", "BasicUsage");
+            //#elif NET7_0
+            //Assembly = new("../../Release/net7.0/BasicUsage.dll", "BasicUsage");
+            //#elif NET8_0
+            //Assembly = new("../../Release/net8.0/BasicUsage.dll", "BasicUsage");
+            //#elif NET9_0
+            //Assembly = new("../../Release/net9.0/BasicUsage.dll", "BasicUsage");
+            //#endif
+            Assembly = new("BasicUsage");
         }
 
         [Fact]
-        public async Task AsyncInstanceSingleMethodTest()
+        public async Task MethodPropertyTest()
         {
-            var instance = GetInstance("AsyncInstanceSingleMethod");
-            var arrArg = new object[] { Guid.NewGuid(), 1.2, new object() };
-#if NET461 || NET6
-            await (Task)instance.EntryAsync(1, "2", arrArg);
-#else
-            await (ValueTask<string>)instance.EntryAsync(1, "2", arrArg);
-#endif
-            Assert.Equal(instance.Context.Arguments.Length, 3);
-            for (var i = 0; i < arrArg.Length; i++)
-            {
-                Assert.Equal(arrArg[i], instance.Context.Arguments[2][i]);
-            }
+            var instance = Assembly.GetInstance(nameof(AccessableUseCase));
+            var staticInstance = Assembly.GetStaticInstance(nameof(AccessableUseCase));
+            var type = (Type)instance.GetType();
 
-            instance.Context = null;
-#if NET461 || NET6
-            await Assert.ThrowsAsync<InvalidOperationException>(() => (Task)instance.ExceptionAsync());
-#else
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ((ValueTask<string>)instance.ExceptionAsync()).AsTask());
-#endif
-            Assert.NotNull(instance.Context.Exception);
-            // Combine the following two steps will throws an exception.
-            IDictionary data = instance.Context.Exception.Data;
-            Assert.Equal(1, data.Count);
+            var recording = (List<string>)instance.Recording;
+            var staticRecording = (List<string>)type.GetProperty("StaticRecording").GetValue(null);
 
-            instance.Context = null;
-#if NET461 || NET6
-            var successValue = await (Task<int>)instance.SuccessAsync();
-#else
-            var successValue = await (ValueTask<int>)instance.SuccessAsync();
-#endif
-            Assert.Equal(successValue, instance.Context.ReturnValue);
+            recording.Clear();
+            staticRecording.Clear();
+            instance.IntItem = 2;
+            Assert.Equal(AccessableUseCase.Expected_Property_Set, recording);
 
-            instance.Context = null;
-#if NET461 || NET6
-            await Assert.ThrowsAsync<InvalidOperationException>(() => (Task)instance.ExitWithExceptionAsync());
-#else
-            await Assert.ThrowsAsync<InvalidOperationException>(() => ((ValueTask<string>)instance.ExitWithExceptionAsync()).AsTask());
-#endif
-            Assert.Null(instance.Context.ReturnValue);
-            Assert.NotNull(instance.Context.Exception);
+            recording.Clear();
+            staticRecording.Clear();
+            var intItem = (int)instance.IntItem;
+            Assert.Equal(AccessableUseCase.Expected_Property_Get, recording);
+            Assert.NotEqual(int.MinValue, intItem);
 
-            instance.Context = null;
-#if NET461 || NET6
-            var exitWithSuccessValue = await (Task<string>)instance.ExitWithSuccessAsync();
-#else
-            var exitWithSuccessValue = await (ValueTask<string>)instance.ExitWithSuccessAsync();
-#endif
-            Assert.Equal(instance.Context.ReturnValue, exitWithSuccessValue);
-            Assert.Null(instance.Context.Exception);
+            recording.Clear();
+            staticRecording.Clear();
+            instance.Transfer(3);
+            Assert.Equal(AccessableUseCase.Expected_Method, recording);
+
+            recording.Clear();
+            staticRecording.Clear();
+            type.GetProperty("StringItem").SetValue(null, "ok");
+            Assert.Equal(AccessableUseCase.Expected_Property_Set, staticRecording);
+
+            recording.Clear();
+            staticRecording.Clear();
+            var stringItem = (string)type.GetProperty("StringItem").GetValue(null);
+            Assert.Equal(AccessableUseCase.Expected_Property_Get, staticRecording);
+            Assert.NotNull(stringItem);
+
+            recording.Clear();
+            staticRecording.Clear();
+            await (Task<int>)staticInstance.TransferAsync(1);
+            Assert.Equal(AccessableUseCase.Expected_Method, staticRecording);
         }
 
         [Fact]
         public void ModifyReturnValueTest()
         {
             var originInstance = new ModifyReturnValue();
-            var instance = GetInstance("ModifyReturnValue");
+            var instance = Assembly.GetInstance("ModifyReturnValue");
 
             Assert.Throws<InvalidOperationException>(() => originInstance.Exception());
             var exceptionHandledValue = instance.Exception();
@@ -161,7 +130,7 @@ namespace Rougamo.Fody.Tests
         public async Task AsyncModifyReturnValueTest()
         {
             var originInstance = new AsyncModifyReturnValue();
-            var instance = GetInstance("AsyncModifyReturnValue");
+            var instance = Assembly.GetInstance("AsyncModifyReturnValue");
 
 #if NET461 || NET6
             await Assert.ThrowsAsync<InvalidOperationException>(() => originInstance.ExceptionAsync());
@@ -249,7 +218,7 @@ namespace Rougamo.Fody.Tests
         {
             // iterator can not handle exception and modify return value
             var originInstance = new ModifyIteratorReturnValue();
-            var instance = GetInstance("ModifyIteratorReturnValue");
+            var instance = Assembly.GetInstance("ModifyIteratorReturnValue");
 
             var min = 5;
             var max = 30;
@@ -277,7 +246,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public void SyncTest()
         {
-            var instance = GetInstance("SyncExecution");
+            var instance = Assembly.GetInstance("SyncExecution");
 
             string flag;
             flag = instance.Call("get_InstanceProp1", null);
@@ -324,7 +293,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task AsyncTest()
         {
-            var instance = GetInstance("AsyncExecution");
+            var instance = Assembly.GetInstance("AsyncExecution");
 
             var input = new List<string>();
             await (Task)instance.Void1(input);
@@ -369,8 +338,8 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task ArgumentRewriteTest()
         {
-            var instance = GetInstance(nameof(ModifyArguments));
-            var attribute = GetStaticInstance(typeof(RewriteArgsAttribute).FullName, true);
+            var instance = Assembly.GetInstance(nameof(ModifyArguments));
+            var attribute = Assembly.GetStaticInstance(typeof(RewriteArgsAttribute).FullName, true);
 
             string a = string.Empty;
             sbyte b = 1;
@@ -430,8 +399,8 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task RetryTest()
         {
-            var instance = GetInstance(nameof(SyncExecution));
-            var asyncInstance = GetInstance(nameof(AsyncExecution));
+            var instance = Assembly.GetInstance(nameof(SyncExecution));
+            var asyncInstance = Assembly.GetInstance(nameof(AsyncExecution));
 
             var datas = new List<int>();
 
@@ -468,7 +437,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task OrderTest()
         {
-            var instance = GetInstance(nameof(OrderUseCase));
+            var instance = Assembly.GetInstance(nameof(OrderUseCase));
 
             string[] expected;
             List<string> actual;
@@ -487,7 +456,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public void FreshArgsTest()
         {
-            var instance = GetInstance(nameof(FreshArguments));
+            var instance = Assembly.GetInstance(nameof(FreshArguments));
 
             var x = 0;
             var y = 0;
@@ -506,7 +475,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task RougamoTest()
         {
-            var instance = GetInstance(nameof(RougamoUsage));
+            var instance = Assembly.GetInstance(nameof(RougamoUsage));
 
             var executedMos = new List<string>();
 
@@ -524,7 +493,7 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task GenericMoTest()
         {
-            var instance = GetInstance(nameof(GenericMoUseCase));
+            var instance = Assembly.GetInstance(nameof(GenericMoUseCase));
 
             var executedMos = new List<string>();
 
@@ -548,8 +517,8 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task OmitTest()
         {
-            var instance = GetInstance(nameof(OmitUseCase));
-            var sInstance = GetStaticInstance(nameof(OmitUseCase));
+            var instance = Assembly.GetInstance(nameof(OmitUseCase));
+            var sInstance = Assembly.GetStaticInstance(nameof(OmitUseCase));
 
             var executedMos = new List<string>();
             List<string> returnMos;
@@ -640,8 +609,8 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public async Task IndirectDependencyTest()
         {
-            var instance = GetInstance(nameof(IndirectDependencyUseCase));
-            var sInstance = GetStaticInstance(nameof(IndirectDependencyUseCase));
+            var instance = Assembly.GetInstance(nameof(IndirectDependencyUseCase));
+            var sInstance = Assembly.GetStaticInstance(nameof(IndirectDependencyUseCase));
 
             var mos = new List<string>();
 
@@ -657,9 +626,9 @@ namespace Rougamo.Fody.Tests
         [Fact]
         public void CtorTest()
         {
-            var sEmptyInstance = GetStaticInstance(nameof(ConstructorEmpty));
-            var sThrowsInstance = GetStaticInstance(nameof(ConstructorThrows));
-            var sTryCatchInstance = GetStaticInstance(nameof(ConstructorTryCatch));
+            var sEmptyInstance = Assembly.GetStaticInstance(nameof(ConstructorEmpty));
+            var sThrowsInstance = Assembly.GetStaticInstance(nameof(ConstructorThrows));
+            var sTryCatchInstance = Assembly.GetStaticInstance(nameof(ConstructorTryCatch));
 
             string[] expected = ["CtorValueMo"];
             Assert.Equal(expected, sEmptyInstance.GetExecutedMos());
@@ -669,135 +638,137 @@ namespace Rougamo.Fody.Tests
             var executedMos = new List<string>();
 
             executedMos.Clear();
-            var emptyInstance = GetInstance(nameof(ConstructorEmpty), false, null, [executedMos]);
+            var emptyInstance = Assembly.GetInstance(nameof(ConstructorEmpty), false, null, [executedMos]);
             Assert.Equal(executedMos, executedMos);
 
             executedMos.Clear();
-            var throwsInstance = GetInstance(nameof(ConstructorThrows), false, null, [executedMos]);
+            var throwsInstance = Assembly.GetInstance(nameof(ConstructorThrows), false, null, [executedMos]);
             Assert.Equal(executedMos, executedMos);
 
             executedMos.Clear();
-            var tryCatchInstance = GetInstance(nameof(ConstructorTryCatch), false, null, [executedMos]);
+            var tryCatchInstance = Assembly.GetInstance(nameof(ConstructorTryCatch), false, null, [executedMos]);
             Assert.Equal(executedMos, executedMos);
         }
 
         [Fact]
-        public async Task ForceSyncTest()
+        public async Task LifetimeTest()
         {
-            var instance = GetInstance(nameof(ForceSyncUseCase));
-            var sInstance = GetStaticInstance(nameof(ForceSyncUseCase));
+            var instance = Assembly.GetInstance(nameof(LifetimeUseCase));
 
-            var actualExecution = new List<string>();
-            var expectedExecution = new List<string>();
-            string[] returnedExecution;
+            var list = new List<object>();
 
-            actualExecution.Clear();
-            returnedExecution = await (ValueTask<string[]>)instance.VPassedAAA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            #region Singleton
+            list.Clear();
+            instance.SingletonNested(list);
+            Assert.Equal(2, list.Count);
+            Assert.Same(list[0], list[1]);
+            instance.Singleton(list);
+            Assert.Equal(3, list.Count);
+            Assert.Same(list[0], list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)instance.PassedAAS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            await (Task)instance.SingletonNestedAsync(list);
+            Assert.Equal(2, list.Count);
+            Assert.Same(list[0], list[1]);
+            await (Task)instance.SingletonAsync(list);
+            Assert.Equal(3, list.Count);
+            Assert.Same(list[0], list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (ValueTask<string[]>)sInstance.SVPassedASA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            ((IEnumerable<int>)instance.SingletonNestedIterator(list)).ToArray();
+            Assert.Equal(2, list.Count);
+            Assert.Same(list[0], list[1]);
+            ((IEnumerable<int>)instance.SingletonIterator(list)).ToArray();
+            Assert.Equal(3, list.Count);
+            Assert.Same(list[0], list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)sInstance.SPassedASS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            await ((IAsyncEnumerable<int>)instance.SingletonNestedAiterator(list)).ToArrayAsync();
+            Assert.Equal(2, list.Count);
+            Assert.Same(list[0], list[1]);
+            await ((IAsyncEnumerable<int>)instance.SingletonAiterator(list)).ToArrayAsync();
+            Assert.Equal(3, list.Count);
+            Assert.Same(list[0], list[2]);
+            #endregion Singleton
 
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)instance.PassedSSS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            #region Pooled
+            list.Clear();
+            instance.PooledNested(list);
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            instance.Pooled(list);
+            Assert.Equal(3, list.Count);
+            Assert.True(list[0] == list[2] || list[1] == list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (ValueTask<string[]>)instance.VPassedSSA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            await (Task)instance.PooledNestedAsync(list);
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            await (Task)instance.PooledAsync(list);
+            Assert.Equal(3, list.Count);
+            Assert.True(list[0] == list[2] || list[1] == list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)sInstance.SPassedSAS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            ((IEnumerable<int>)instance.PooledNestedIterator(list)).ToArray();
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            ((IEnumerable<int>)instance.PooledIterator(list)).ToArray();
+            Assert.Equal(3, list.Count);
+            Assert.True(list[0] == list[2] || list[1] == list[2]);
 
-            actualExecution.Clear();
-            returnedExecution = await (ValueTask<string[]>)sInstance.SVPassedSAA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
+            list.Clear();
+            await ((IAsyncEnumerable<int>)instance.PooledNestedAiterator(list)).ToArrayAsync();
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            await ((IAsyncEnumerable<int>)instance.PooledAiterator(list)).ToArrayAsync();
+            Assert.Equal(3, list.Count);
+            Assert.True(list[0] == list[2] || list[1] == list[2]);
+            #endregion Pooled
 
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (Task)instance.FailedAAA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
+            #region Transient
+            list.Clear();
+            instance.TransientNested(list);
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            instance.Transient(list);
+            Assert.Equal(3, list.Count);
+            Assert.NotSame(list[0], list[2]);
+            Assert.NotSame(list[1], list[2]);
 
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)instance.VFailedAAS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
+            list.Clear();
+            await (Task)instance.TransientNestedAsync(list);
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            await (Task)instance.TransientAsync(list);
+            Assert.Equal(3, list.Count);
+            Assert.NotSame(list[0], list[2]);
+            Assert.NotSame(list[1], list[2]);
 
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (Task)sInstance.SFailedASA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
+            list.Clear();
+            ((IEnumerable<int>)instance.TransientNestedIterator(list)).ToArray();
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            ((IEnumerable<int>)instance.TransientIterator(list)).ToArray();
+            Assert.Equal(3, list.Count);
+            Assert.NotSame(list[0], list[2]);
+            Assert.NotSame(list[1], list[2]);
 
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)sInstance.SVFailedASS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
+            list.Clear();
+            await ((IAsyncEnumerable<int>)instance.TransientNestedAiterator(list)).ToArrayAsync();
+            Assert.Equal(2, list.Count);
+            Assert.NotSame(list[0], list[1]);
+            await ((IAsyncEnumerable<int>)instance.TransientAiterator(list)).ToArrayAsync();
+            Assert.Equal(3, list.Count);
+            Assert.NotSame(list[0], list[2]);
+            Assert.NotSame(list[1], list[2]);
+            #endregion Transient
 
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)instance.VFailedSSS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (Task)instance.FailedSSA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)sInstance.SVFailedSAS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (Task)sInstance.SFailedSAA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)instance.PassedAAA_SSS_AAA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
-
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)instance.PassedSSS_AAA_SSS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
-
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)sInstance.SPassedASS_SAS_SSA(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
-
-            actualExecution.Clear();
-            returnedExecution = await (Task<string[]>)sInstance.SPassedSAA_ASA_AAS(actualExecution);
-            Assert.Equal(returnedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)instance.VFailedAAA_SSS_SSS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)instance.VFailedSSS_SSS_AAA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)sInstance.SVFailedAAS_ASS_ASA(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
-
-            actualExecution.Clear();
-            expectedExecution.Clear();
-            await Assert.ThrowsAsync<NotImplementedException>(async () => await (ValueTask)sInstance.SVFailedSAA_SSA_SAS(actualExecution, expectedExecution));
-            Assert.Equal(expectedExecution, actualExecution);
+            list.Clear();
+            instance.GenericPooled(list);
+            Assert.Single(list);
+            await (Task)instance.GenericPooledAsync(list);
+            Assert.Equal(2, list.Count);
+            Assert.Same(list[0], list[1]);
         }
     }
 }

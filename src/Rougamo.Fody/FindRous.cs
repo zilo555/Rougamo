@@ -3,6 +3,8 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using Mono.Collections.Generic;
+using Rougamo.Fody.Models;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,7 +15,7 @@ namespace Rougamo.Fody
     {
         private void FindRous()
         {
-            _rouTypes = new List<RouType>();
+            _rouTypes = [];
             FullScan();
             ExtractTypeReferences();
         }
@@ -33,13 +35,20 @@ namespace Rougamo.Fody
 
             if (globalMos.GlobalIgnore) return;
 
+            var configuredMos = ResolveConfiguredMos();
+
             var types = new List<TypeDefinition>();
             ExpandTypes(ModuleDefinition.Types, types);
             foreach (var typeDef in types)
             {
                 if (typeDef.IsEnum || typeDef.IsInterface || typeDef.IsArray || typeDef.IsDelegate() || !typeDef.HasMethods || typeDef.CustomAttributes.Any(x => x.AttributeType.Is(Constants.TYPE_CompilerGeneratedAttribute) || x.AttributeType.Is(Constants.TYPE_Runtime_CompilerGeneratedAttribute))) continue;
-                if (typeDef.Implement(Constants.TYPE_IMo) || typeDef.InheritAny(Constants.TYPE_MoRepulsion, Constants.TYPE_IgnoreMoAttribute, Constants.TYPE_MoProxyAttribute)) continue;
-                if (_config.ExceptTypePatterns.Any(x => x.IsMatch(typeDef.FullName))) continue;
+                if (typeDef.InheritAny(Constants.TYPE_MoRepulsion, Constants.TYPE_IgnoreMoAttribute, Constants.TYPE_MoProxyAttribute)) continue;
+                if (typeDef.Implement(Constants.TYPE_IMo))
+                {
+                    HandleMoLifetime(typeDef);
+                    continue;
+                }
+                if (Configuration.ExceptTypePatterns.Any(x => x.IsMatch(typeDef.FullName))) continue;
 
                 var typeIgnores = ExtractIgnores(typeDef.CustomAttributes);
                 if (typeIgnores == null) continue;
@@ -47,6 +56,7 @@ namespace Rougamo.Fody
                 var rouType = new RouType(typeDef);
                 var implementations = ExtractClassImplementations(typeDef);
                 var classExtracts = ExtractAttributes(typeDef.CustomAttributes, globalMos.Proxies!);
+                var skipRefStruct = Configuration.SkipRefStruct || globalMos.SkipRefStruct || typeDef.CustomAttributes.Any(x => x.Is(Constants.TYPE_SkipRefStructAttribute));
 
                 foreach (var methodDef in typeDef.Methods)
                 {
@@ -69,13 +79,52 @@ namespace Rougamo.Fody
                     if (methodIgnores == null) continue;
 
                     var methodExtracts = ExtractAttributes(attributes, globalMos.Proxies!);
-                    rouType.Initialize(methodDef, globalMos.Directs!, globalMos.Generics, implementations, classExtracts.Mos, classExtracts.GenericMos, classExtracts.Proxied, methodExtracts.Mos, methodExtracts.GenericMos, methodExtracts.Proxied, globalMos.Ignores!, typeIgnores, methodIgnores, _config.CompositeAccessibility);
+                    var srf = skipRefStruct || methodDef.CustomAttributes.Any(x => x.Is(Constants.TYPE_SkipRefStructAttribute));
+                    rouType.Initialize(methodDef, configuredMos, globalMos.Directs!, globalMos.Generics, implementations, classExtracts.Mos, classExtracts.GenericMos, classExtracts.Proxied, methodExtracts.Mos, methodExtracts.GenericMos, methodExtracts.Proxied, globalMos.Ignores!, typeIgnores, methodIgnores, Configuration.CompositeAccessibility, srf);
                 }
                 if (rouType.HasMo)
                 {
                     _rouTypes.Add(rouType);
                 }
             }
+        }
+
+        private void HandleMoLifetime(TypeDefinition tdMo)
+        {
+            if (tdMo.IsValueType) return;
+
+            var lifetimeAttribute = tdMo.CustomAttributes.FirstOrDefault(x => x.Is(Constants.TYPE_LifetimeAttribute));
+            if (lifetimeAttribute == null || lifetimeAttribute.ConstructorArguments.Count != 1) return;
+
+            var lifetime = (Lifetime)Convert.ToInt32(lifetimeAttribute.ConstructorArguments[0].Value);
+            var ctorNonArgs = tdMo.GetConstructors().FirstOrDefault(x => !x.IsStatic && x.Parameters.Count == 0);
+            if ((lifetime == Lifetime.Pooled || lifetime == Lifetime.Singleton) && ctorNonArgs == null) throw new FodyWeavingException($"{tdMo} has a {lifetime} lifetime but it does not have a parameterless constructor.");
+            if (lifetime != Lifetime.Singleton || tdMo.GetMethod(false, x => x.Name == Constants.METHOD__Singleton && x.IsStatic) != null) return;
+
+            var trMo = this.Import(tdMo);
+
+            var fdSingleton = tdMo.Fields.AddGet(new FieldDefinition(Constants.FIELD_Singleton, FieldAttributes.Private | FieldAttributes.Static | FieldAttributes.InitOnly, trMo));
+            var frSingleton = new FieldReference(fdSingleton.Name, fdSingleton.FieldType, trMo);
+
+            var cctor = tdMo.GetStaticConstructor();
+            Instruction[] initSingletonField = [Instruction.Create(OpCodes.Newobj, this.Import(ctorNonArgs)), Instruction.Create(OpCodes.Stsfld, frSingleton)];
+            if (cctor != null)
+            {
+                cctor.Body.Instructions.Insert(0, initSingletonField);
+            }
+            else
+            {
+                var cctorAttribute = MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName;
+                cctor = tdMo.Methods.AddGet(new MethodDefinition(".cctor", cctorAttribute, _tVoidRef));
+                cctor.Body.Instructions.Add(initSingletonField);
+                cctor.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+            }
+
+            var mdSingleton = tdMo.Methods.AddGet(new MethodDefinition(Constants.METHOD__Singleton, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, trMo));
+            mdSingleton.Body.Instructions.Add([
+                Instruction.Create(OpCodes.Ldsfld, frSingleton),
+                Instruction.Create(OpCodes.Ret)
+            ]);
         }
 
         /// <summary>
@@ -175,7 +224,21 @@ namespace Rougamo.Fody
                 }
             }
 
-            return new SimplifyGlobalMos(assemblyMos.Directs.Values.SelectMany(x => x).ToArray(), assemblyMos.Generics.Values.ToArray(), assemblyMos.Proxies, assemblyMos.Ignores.Keys.ToArray());
+            return new SimplifyGlobalMos(assemblyMos.SkipRefStruct || moduleMos.SkipRefStruct, assemblyMos.Directs.Values.SelectMany(x => x).ToArray(), assemblyMos.Generics.Values.ToArray(), assemblyMos.Proxies, assemblyMos.Ignores.Keys.ToArray());
+        }
+
+        private ConfiguredMo[] ResolveConfiguredMos()
+        {
+            var configuredMos = new List<ConfiguredMo>();
+
+            foreach (var mo in Configuration.Mos)
+            {
+                var typeRef = FindAndImportType(mo.Type);
+
+                configuredMos.Add(new(typeRef, mo.Pattern));
+            }
+
+            return configuredMos.ToArray();
         }
 
         /// <summary>
@@ -191,6 +254,7 @@ namespace Rougamo.Fody
         /// </returns>
         private GlobalMos FindGlobalAttributes(Collection<CustomAttribute> attributes, string locationName)
         {
+            var skipRefStruct = false;
             var directs = new Dictionary<string, List<CustomAttribute>>();
             var generics = new Dictionary<string, TypeReference>();
             var proxies = new Dictionary<string, ProxyReleation>();
@@ -241,9 +305,13 @@ namespace Rougamo.Fody
                         break;
                     }
                 }
+                else if (attrType.Is(Constants.TYPE_SkipRefStructAttribute))
+                {
+                    skipRefStruct = true;
+                }
             }
 
-            return new GlobalMos(directs, generics, proxies.Values.ToDictionary(x => x.Origin.FullName, x => x.Proxy), ignores);
+            return new GlobalMos(skipRefStruct, directs, generics, proxies.Values.ToDictionary(x => x.Origin.FullName, x => x.Proxy), ignores);
         }
 
         /// <summary>

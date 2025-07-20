@@ -1,23 +1,15 @@
 ﻿using Rougamo.Context;
 using Rougamo;
 using System.Threading.Tasks;
+using Rougamo.Metadatas;
 
 namespace BasicUsage.Mos
 {
+    [Optimization(MethodContext = Omit.Arguments)]
+    [Advice(Feature.EntryReplace)]
+    [Pointcut(AccessFlags.All)]
     public struct ValueOmitArguments : IMo
     {
-        public AccessFlags Flags => AccessFlags.All;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.EntryReplace;
-
-        public double Order => 1;
-
-        public Omit MethodContextOmits => Omit.Arguments;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public void OnEntry(MethodContext context)
         {
             if (context.Arguments.Length == 0)

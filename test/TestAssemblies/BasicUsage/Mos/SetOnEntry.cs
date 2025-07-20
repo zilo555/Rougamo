@@ -13,18 +13,6 @@ namespace BasicUsage.Mos
         private const string LIST_KEY = nameof(LIST_KEY);
         private const string MAP_KEY = nameof(MAP_KEY);
 
-        public AccessFlags Flags => AccessFlags.All;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.OnEntry;
-
-        public double Order => 1;
-
-        public Omit MethodContextOmits => Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public virtual string Name => GetType().Name;
 
         public void OnEntry(MethodContext context)

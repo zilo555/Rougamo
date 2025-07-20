@@ -5,6 +5,7 @@ using Fody.Simulations.PlainValues;
 using Fody.Simulations.Types;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Rougamo.Context;
 using Rougamo.Fody.Contexts;
 using Rougamo.Fody.Simulations.Types;
 using System;
@@ -33,6 +34,8 @@ namespace Rougamo.Fody
 
         private void SyncBuildProxyMethod(RouMethod rouMethod, TsWeavingTarget tWeavingTarget)
         {
+            StackTraceHidden(rouMethod.MethodDef);
+
             tWeavingTarget.M_Proxy.Def.Clear();
             DebuggerStepThrough(tWeavingTarget.M_Proxy.Def);
 
@@ -52,96 +55,110 @@ namespace Rougamo.Fody
             var vException = rouMethod.Features.HasIntersection(Feature.OnException | Feature.OnExit) ? tWeavingTarget.M_Proxy.CreateVariable(_tExceptionRef) : null;
             var vResult = tWeavingTarget.M_Proxy.Result.Ref.IsVoid() ? null : tWeavingTarget.M_Proxy.CreateVariable(tWeavingTarget.M_Proxy.Result);
             var vContext = tWeavingTarget.M_Proxy.CreateVariable<TsMethodContext>(_tMethodContextRef);
-            VariableSimulation<TsMo>[]? vMos = null;
-            VariableSimulation<TsArray<TsMo>>? vMoArray = null;
-            if (rouMethod.Mos.Length > _config.MoArrayThreshold)
-            {
-                vMoArray = tWeavingTarget.M_Proxy.CreateVariable<TsArray<TsMo>>(_tIMoArrayRef);
-            }
-            else
-            {
-                vMos = rouMethod.Mos.Select(x => tWeavingTarget.M_Proxy.CreateVariable<TsMo>(x.MoTypeRef)).ToArray();
-            }
+            var vMos = rouMethod.Mos.Select(x => tWeavingTarget.M_Proxy.CreateVariable<TsMo>(x.MoTypeRef)).ToArray();
 
+            Instruction poolTryStart = Create(OpCodes.Nop), poolFinallyStart = Create(OpCodes.Nop), poolFinallyEnd = Create(OpCodes.Nop);
             Instruction? tryStart = null, catchStart = null, catchEnd = Create(OpCodes.Nop);
 
-            // .var mo = new Mo1Attributue(...);
-            instructions.Add(SyncInitMos(rouMethod, tWeavingTarget, vMos, vMoArray));
-            // .var context = new MethodContext(...);
-            instructions.Add(SyncInitMethodContext(rouMethod, tWeavingTarget, args, vContext, vMos, vMoArray));
-            // .mo.OnEntry(context);
-            instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnEntry, mo => mo.M_OnEntry));
-            // .if (context.ReturnValueReplaced) { .. }
-            instructions.Add(SyncIfOnEntryReplacedReturn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, vResult));
-            // .if (_context.RewriteArguments) { ... }
-            instructions.Add(SyncIfRewriteArguments(rouMethod, tWeavingTarget, args, vContext));
+            var pooledItems = new List<IParameterSimulation> { vContext };
 
-            // .RETRY:
-            instructions.Add(context.AnchorRetry);
+            // .var mo = new Mo1Attributue(...);
+            instructions.Add(SyncInitMos(rouMethod, tWeavingTarget, vMos, pooledItems));
+            // .var context = new MethodContext(...);
+            instructions.Add(SyncInitMethodContext(rouMethod, tWeavingTarget, args, vContext, vMos));
+
+            instructions.Add(poolTryStart);
             // .try
             {
-                if (vResult == null)
-                {
-                    // .actualMethod(...);
-                    tryStart = instructions.AddGetFirst(tWeavingTarget.M_Actual.Call(tWeavingTarget.M_Proxy, args));
-                }
-                else
-                {
-                    // .result = actualMethod(...);
-                    tryStart = instructions.AddGetFirst(vResult.Assign(target => tWeavingTarget.M_Actual.Call(tWeavingTarget.M_Proxy, args)));
-                }
-                // .context.ReturnValue = result;
-                SyncSaveResult(rouMethod, tWeavingTarget, vContext, vResult);
+                // .mo.OnEntry(context);
+                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnEntry, mo => mo.M_OnEntry));
+                // .if (context.ReturnValueReplaced) { .. }
+                instructions.Add(SyncIfOnEntryReplacedReturn(rouMethod, tWeavingTarget, vContext, vMos, vResult, poolFinallyEnd));
+                // .if (_context.RewriteArguments) { ... }
+                instructions.Add(SyncIfRewriteArguments(rouMethod, tWeavingTarget, args, vContext));
 
+                // .RETRY:
+                instructions.Add(context.AnchorRetry);
+                // .try
+                {
+                    if (vResult == null)
+                    {
+                        // .actualMethod(...);
+                        tryStart = instructions.AddGetFirst(tWeavingTarget.M_Actual.Call(tWeavingTarget.M_Proxy, args));
+                    }
+                    else
+                    {
+                        // .result = actualMethod(...);
+                        tryStart = instructions.AddGetFirst(vResult.Assign(target => tWeavingTarget.M_Actual.Call(tWeavingTarget.M_Proxy, args)));
+                    }
+                    // .context.ReturnValue = result;
+                    SyncSaveResult(rouMethod, tWeavingTarget, vContext, vResult);
+
+                    if (vException != null)
+                    {
+                        instructions.Add(Create(OpCodes.Leave, catchEnd));
+                    }
+                }
+                // .catch
                 if (vException != null)
                 {
-                    instructions.Add(Create(OpCodes.Leave, catchEnd));
+                    catchStart = instructions.AddGetFirst(vException.Assign(target => []));
+                    // .context.Exception = exception;
+                    instructions.Add(vContext.Value.P_Exception.Assign(vException));
+                    // .mo.OnException(context); ...
+                    instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnException, mo => mo.M_OnException));
+                    // .arg_i = context.Arguments[i];
+                    instructions.Add(SyncRefreshArguments(rouMethod, tWeavingTarget, args, vContext, Feature.OnException));
+                    // .if (context.RetryCount > 0) goto RETRY;
+                    instructions.Add(SynCheckRetry(rouMethod, tWeavingTarget, vContext, context, Feature.OnException, true));
+                    // .if (exceptionHandled) result = context.ReturnValue;
+                    instructions.Add(SyncSaveResultIfExceptionHandled(rouMethod, tWeavingTarget, vContext, vResult, out var vExceptionHandled));
+                    // .mo.OnExit(context);
+                    instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnExit, mo => mo.M_OnExit));
+                    // .if (exceptionHandled) return result;
+                    instructions.Add(SyncReturnIfExceptionHandled(rouMethod, tWeavingTarget, vExceptionHandled, context));
+                    instructions.Add(Create(OpCodes.Rethrow));
+
+                    instructions.Add(catchEnd);
                 }
-            }
-            // .catch
-            if (vException != null)
-            {
-                catchStart = instructions.AddGetFirst(vException.Assign(target => []));
-                // .context.Exception = exception;
-                instructions.Add(vContext.Value.P_Exception.Assign(vException));
-                // .mo.OnException(context); ...
-                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnException, mo => mo.M_OnException));
+
+                // .context.ReturnValue = result;
+                instructions.Add(SyncSaveResult(rouMethod, vContext, vResult));
+                // .mo.OnSuccess(context);
+                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnSuccess, mo => mo.M_OnSuccess));
                 // .arg_i = context.Arguments[i];
-                instructions.Add(SyncRefreshArguments(rouMethod, tWeavingTarget, args, vContext, Feature.OnException));
+                instructions.Add(SyncRefreshArguments(rouMethod, tWeavingTarget, args, vContext, Feature.OnSuccess));
                 // .if (context.RetryCount > 0) goto RETRY;
-                instructions.Add(SynCheckRetry(rouMethod, tWeavingTarget, vContext, context, Feature.OnException, true));
-                // .if (exceptionHandled) result = context.ReturnValue;
-                instructions.Add(SyncSaveResultIfExceptionHandled(rouMethod, tWeavingTarget, vContext, vResult, out var vExceptionHandled));
+                instructions.Add(SynCheckRetry(rouMethod, tWeavingTarget, vContext, context, Feature.OnSuccess, false));
+                // .if (returnValueReplaced) result = context.ReturnValue;
+                instructions.Add(SyncSaveResultIfReturnValueReplaced(rouMethod, tWeavingTarget, vContext, vResult));
                 // .mo.OnExit(context);
-                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnExit, mo => mo.M_OnExit));
-                // .if (exceptionHandled) return result;
-                instructions.Add(SyncReturnIfExceptionHandled(rouMethod, tWeavingTarget, vExceptionHandled, context));
-                instructions.Add(Create(OpCodes.Rethrow));
-
-                instructions.Add(catchEnd);
+                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnExit, mo => mo.M_OnExit));
+                // .return result;
+                instructions.Add(context.AnchorReturnResult.Set(OpCodes.Leave, poolFinallyEnd));
             }
+            // .finally
+            {
+                instructions.Add(poolFinallyStart);
 
-            // .context.ReturnValue = result;
-            instructions.Add(SyncSaveResult(rouMethod, vContext, vResult));
-            // .mo.OnSuccess(context);
-            instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnSuccess, mo => mo.M_OnSuccess));
-            // .arg_i = context.Arguments[i];
-            instructions.Add(SyncRefreshArguments(rouMethod, tWeavingTarget, args, vContext, Feature.OnSuccess));
-            // .if (context.RetryCount > 0) goto RETRY;
-            instructions.Add(SynCheckRetry(rouMethod, tWeavingTarget, vContext, context, Feature.OnSuccess, false));
-            // .if (returnValueReplaced) result = context.ReturnValue;
-            instructions.Add(SyncSaveResultIfReturnValueReplaced(rouMethod, tWeavingTarget, vContext, vResult));
-            // .mo.OnExit(context);
-            instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnExit, mo => mo.M_OnExit));
+                // .RougamoPool<..>.Return(..);
+                foreach (var pooledItem in pooledItems)
+                {
+                    instructions.Add(ReturnToPool(pooledItem, tWeavingTarget.M_Proxy));
+                }
+
+                instructions.Add(Create(OpCodes.Endfinally));
+                instructions.Add(poolFinallyEnd);
+            }
             // .return result;
-            instructions.Add(context.AnchorReturnResult);
             if (vResult != null) instructions.Add(vResult.Load());
             instructions.Add(Create(OpCodes.Ret));
 
             SetTryCatch(tWeavingTarget.M_Proxy.Def, tryStart, catchStart, catchEnd);
+            SetTryFinally(tWeavingTarget.M_Proxy.Def, poolTryStart, poolFinallyStart, poolFinallyEnd);
         }
 
-        private IList<Instruction> SyncInitMos(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMo>[]? vMos, VariableSimulation<TsArray<TsMo>>? vMoArray)
+        private IList<Instruction> SyncInitMos(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMo>[] vMos, List<IParameterSimulation> pooledItems)
         {
             var instructions = new List<Instruction>();
 
@@ -151,42 +168,50 @@ namespace Rougamo.Fody
             {
                 var mo = rouMethod.Mos[i];
 
-                if (vMos != null)
-                {
-                    var vMo = vMos[i];
-                    instructions.Add(vMo.Assign(target => vMo.Value.New(tWeavingTarget.M_Proxy, mo)));
-                }
-                else if (vMoArray != null)
-                {
-                    var tMo = mo.MoTypeRef.Simulate<TsMo>(this);
-                    loadables.Add(new RawValue(tMo, tMo.New(tWeavingTarget.M_Proxy, mo)));
-                }
-            }
-            if (vMoArray != null)
-            {
-                instructions.Add(vMoArray.Assign(target => vMoArray.Value.New(loadables.ToArray())));
+                var vMo = vMos[i];
+                instructions.Add(vMo.Assign(target => NewMo(rouMethod, mo, vMo.Value, tWeavingTarget.M_Proxy, pooledItems)));
             }
 
             return instructions;
         }
 
-        private IList<Instruction> SyncInitMethodContext(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, ArgumentSimulation[] args, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[]? vMos, VariableSimulation<TsArray<TsMo>>? vMoArray)
+        private IList<Instruction> SyncInitMethodContext(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, ArgumentSimulation[] args, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[] vMos)
         {
-            var tMoArray = _tIMoArrayRef.Simulate<TsArray>(this);
-            var tObjectArray = _tObjectArrayRef.Simulate<TsArray>(this);
-            IParameterSimulation[] arguments = [
-                tWeavingTarget.M_Proxy.Def.IsStatic ? new Null(this) : new This(_simulations.Object),
-                new SystemType(rouMethod.MethodDef.DeclaringType, this),
-                new SystemMethodBase(rouMethod.MethodDef, this),
-                rouMethod.MethodContextOmits.Contains(Omit.Mos) ? tMoArray.Null() : vMoArray ?? (IParameterSimulation)tMoArray.NewAsPlainValue(vMos!),
-                rouMethod.MethodContextOmits.Contains(Omit.Arguments) ? tObjectArray.Null() : tObjectArray.NewAsPlainValue(args)
-            ];
-            return vContext.AssignNew(arguments);
+            var instructions = new List<Instruction>();
+
+            // .var context = RougamoPool<MethodContext>.Get();
+            instructions.AddRange(AssignByPool(vContext));
+            // .context.Mos = new Mo[] { ... };
+            if (!rouMethod.MethodContextOmits.Contains(Omit.Mos))
+            {
+                var tMoArray = _tIMoArrayRef.Simulate<TsArray>(this);
+                instructions.AddRange(vContext.Value.P_Mos.Assign(tMoArray.NewAsPlainValue(vMos)));
+            }
+            // .context.Target = this;
+            if (!tWeavingTarget.M_Proxy.Def.IsStatic)
+            {
+                instructions.AddRange(vContext.Value.P_Target.Assign(new This(_simulations.Object)));
+            }
+            // .context.TargeType = typeof(TARGET_TYPE);
+            instructions.AddRange(vContext.Value.P_TargetType.Assign(new SystemType(rouMethod.MethodDef.DeclaringType, this)));
+            // .context.Method = methodof(TARGET_METHOD);
+            instructions.AddRange(vContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, this)));
+            // .context.Arguments = new object[] { ... };
+            if (!rouMethod.MethodContextOmits.Contains(Omit.Arguments))
+            {
+                var tObjectArray = _tObjectArrayRef.Simulate<TsArray>(this);
+                var exceptedRefStructArgs = args.Select(x => x.IsRefStruct() ? x.BeFake(new Null(this)) : x).ToArray();
+                instructions.AddRange(vContext.Value.P_Arguments.Assign(tObjectArray.NewAsPlainValue(exceptedRefStructArgs)));
+            }
+
+            return instructions;
         }
 
-        private IList<Instruction>? SyncIfOnEntryReplacedReturn(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[]? vMos, VariableSimulation<TsArray<TsMo>>? vMoArray, VariableSimulation? vResult)
+        private IList<Instruction>? SyncIfOnEntryReplacedReturn(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[] vMos, VariableSimulation? vResult, Instruction poolFinallyEnd)
         {
-            if (!rouMethod.Features.Contains(Feature.EntryReplace) || rouMethod.MethodContextOmits.Contains(Omit.ReturnValue)) return null;
+            if (!rouMethod.Features.Contains(Feature.EntryReplace) ||
+                rouMethod.MethodContextOmits.Contains(Omit.ReturnValue) ||
+                vResult != null && rouMethod.SkipRefStruct && vResult.IsRefStruct()) return null;
 
             // .if (context.ReturnValueReplaced)
             return vContext.Value.P_ReturnValueReplaced.If(anchor =>
@@ -199,13 +224,13 @@ namespace Rougamo.Fody
                     instructions.Add(vResult.Assign(vContext.Value.P_ReturnValue));
                 }
                 // .mo.OnExit(context);
-                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, vMoArray, Feature.OnExit, mo => mo.M_OnExit));
+                instructions.Add(SyncMosOn(rouMethod, tWeavingTarget, vContext, vMos, Feature.OnExit, mo => mo.M_OnExit));
                 // .return result;
                 if (vResult != null)
                 {
                     instructions.Add(vResult.Load());
                 }
-                instructions.Add(Create(OpCodes.Ret));
+                instructions.Add(Create(OpCodes.Leave, poolFinallyEnd));
 
                 return instructions;
             });
@@ -224,15 +249,18 @@ namespace Rougamo.Fody
                 instructions.Add(vArguments.Assign(vContext.Value.P_Arguments));
                 for (var i = 0; i < args.Length; i++)
                 {
+                    var arg = args[i];
+                    if (arg.IsRefStruct()) continue;
+
                     // .if (args[i] == null)
                     instructions.Add(vArguments.Value[i].IsNull().If((a1, a2) =>
                     {
                         // ._parameters[i] = default;
-                        return args[i].AssignDefault();
+                        return arg.AssignDefault();
                     }, (a1, a2) =>
                     {// .else (args[i] != null)
                         // ._parameters[i] = args[i];
-                        return args[i].Assign(vArguments.Value[i]);
+                        return arg.Assign(vArguments.Value[i]);
                     }));
                 }
 
@@ -242,7 +270,10 @@ namespace Rougamo.Fody
 
         private IList<Instruction> SyncSaveResult(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation? vResult)
         {
-            if (vResult == null || !rouMethod.Features.HasIntersection(Feature.OnSuccess | Feature.OnExit) || rouMethod.MethodContextOmits.Contains(Omit.ReturnValue)) return [];
+            if (vResult == null ||
+                !rouMethod.Features.HasIntersection(Feature.OnSuccess | Feature.OnExit) ||
+                rouMethod.MethodContextOmits.Contains(Omit.ReturnValue) ||
+                rouMethod.SkipRefStruct && vResult.IsRefStruct()) return [];
 
             // .context.ReturnValue  = result;
             return vContext.Value.P_ReturnValue.Assign(vResult);
@@ -269,7 +300,7 @@ namespace Rougamo.Fody
             for (var i = 0; i < args.Length; i++)
             {
                 var arg = args[i];
-                if (checkByRef && !arg.IsByReference) continue;
+                if (checkByRef && !arg.IsByReference || arg.IsRefStruct()) continue;
 
                 // .context.Arguments[i] = arg_i;
                 if (vArguments == null)
@@ -305,7 +336,9 @@ namespace Rougamo.Fody
         private IList<Instruction> SyncSaveResultIfExceptionHandled(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation? vResult, out VariableSimulation? vExceptionHandled)
         {
             vExceptionHandled = null;
-            if (!rouMethod.Features.Contains(Feature.ExceptionHandle) || rouMethod.MethodContextOmits.Contains(Omit.ReturnValue)) return [];
+            if (!rouMethod.Features.Contains(Feature.ExceptionHandle) ||
+                rouMethod.MethodContextOmits.Contains(Omit.ReturnValue) ||
+                vResult != null && rouMethod.SkipRefStruct && vResult.IsRefStruct()) return [];
 
             var instructions = new List<Instruction>();
 
@@ -350,7 +383,10 @@ namespace Rougamo.Fody
 
         private IList<Instruction> SyncSaveResult(RouMethod rouMethod, VariableSimulation<TsMethodContext> vContext, VariableSimulation? vResult)
         {
-            if (vResult == null || !rouMethod.Features.HasIntersection(Feature.OnSuccess | Feature.OnExit) || rouMethod.MethodContextOmits.Contains(Omit.ReturnValue)) return [];
+            if (vResult == null ||
+                !rouMethod.Features.HasIntersection(Feature.OnSuccess | Feature.OnExit) ||
+                rouMethod.MethodContextOmits.Contains(Omit.ReturnValue) ||
+                rouMethod.SkipRefStruct && vResult.IsRefStruct()) return [];
 
             // .context.ReturnValue = result;
             return vContext.Value.P_ReturnValue.Assign(vResult);
@@ -358,7 +394,10 @@ namespace Rougamo.Fody
 
         private IList<Instruction> SyncSaveResultIfReturnValueReplaced(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation? vResult)
         {
-            if (vResult == null || !rouMethod.Features.Contains(Feature.SuccessReplace) || rouMethod.MethodContextOmits.Contains(Omit.ReturnValue)) return [];
+            if (vResult == null ||
+                !rouMethod.Features.Contains(Feature.SuccessReplace) ||
+                rouMethod.MethodContextOmits.Contains(Omit.ReturnValue) ||
+                rouMethod.SkipRefStruct && vResult.IsRefStruct()) return [];
 
             // .if (context.ReturnValueReplaced)
             return vContext.Value.P_ReturnValueReplaced.If(anchor =>
@@ -368,94 +407,27 @@ namespace Rougamo.Fody
             });
         }
 
-        private IList<Instruction> SyncMosOn(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[]? vMos, VariableSimulation<TsArray<TsMo>>? vMoArray, Feature feature, Func<TsMo, MethodSimulation> methodFactory)
+        private IList<Instruction> SyncMosOn(RouMethod rouMethod, TsWeavingTarget tWeavingTarget, VariableSimulation<TsMethodContext> vContext, VariableSimulation<TsMo>[] vMos, Feature feature, Func<TsMo, MethodSimulation> methodFactory)
         {
-            return SyncMosOn(rouMethod, tWeavingTarget.M_Proxy, vContext, vMos?.Select(x => x.Value).ToArray(), vMoArray?.Value, feature, methodFactory);
+            return SyncMosOn(rouMethod, tWeavingTarget.M_Proxy, vContext, vMos.Select(x => x.Value).ToArray(), feature, methodFactory);
         }
 
-        private IList<Instruction> SyncMosOn(RouMethod rouMethod, MethodSimulation mHost, IParameterSimulation pContext, TsMo[]? tMos, TsArray<TsMo>? tMoArray, Feature feature, Func<TsMo, MethodSimulation> methodFactory)
+        private IList<Instruction> SyncMosOn(RouMethod rouMethod, MethodSimulation mHost, IParameterSimulation pContext, TsMo[] tMos, Feature feature, Func<TsMo, MethodSimulation> methodFactory)
         {
             if (!rouMethod.Features.Contains(feature)) return [];
 
             var instructions = new List<Instruction>();
 
-            var reverseCall = feature != Feature.OnEntry && _config.ReverseCallNonEntry;
-            var executeSequence = 0;
-            var executingAll = true;
+            var reverseCall = feature != Feature.OnEntry && Configuration.ReverseCallNonEntry;
 
-            if (tMoArray != null && rouMethod.Mos.Length > 31)
-            {
-                executeSequence = -1;
-            }
             for (var i = 0; i < rouMethod.Mos.Length; i++)
             {
                 var j = reverseCall ? rouMethod.Mos.Length - i - 1 : i;
                 var mo = rouMethod.Mos[j];
-                if (!mo.Features.Contains(feature))
-                {
-                    executingAll = false;
-                    continue;
-                }
+                if (!mo.Features.Contains(feature)) continue;
 
-                if (tMos != null)
-                {
-                    // .mo.OnXxx(context);
-                    instructions.Add(methodFactory(tMos[j]).Call(mHost, pContext));
-                }
-                else if (executeSequence != -1)
-                {
-                    executeSequence |= 1 << j;
-                }
-            }
-
-            if (tMoArray != null)
-            {
-                var vFlag = mHost.CreateVariable(_tInt32Ref);
-                // .moArray[flag].OnXxx(context);
-                var callingInsts = methodFactory(tMoArray[vFlag].Value).Call(mHost, pContext);
-                if (!executingAll)
-                {
-                    if (executeSequence == -1)
-                    {
-                        // .if ((moArray[flag].Feature & feature) != 0) moArray[flag].OnXxx(context);
-                        callingInsts = tMoArray[vFlag].Value.P_Features.And((int)feature).IsEqual(0).IfNot(anchor => callingInsts);
-                    }
-                    else
-                    {
-                        // .if ((executeSequence & flag) != 0) moArray[flag].OnXxx(context);
-                        callingInsts = new Int32Value(1, this).ShiftLeft(vFlag).And(executeSequence).IsEqual(0).IfNot(anchor => callingInsts);
-                    }
-                }
-                var loopFirst = Create(OpCodes.Nop);
-
-                if (reverseCall)
-                {
-                    // .flag = MO_ARRAY_LENGTH - 1;
-                    instructions.Add(vFlag.Assign(rouMethod.Mos.Length - 1));
-                    instructions.Add(loopFirst);
-                    // .if (flag >= 0) { .. }
-                    instructions.Add(vFlag.Lt(0).IfNot(anchor => [
-                        // .moArray[flag].OnXxx(context);
-                        .. callingInsts,
-                        // flag -= 1;
-                        .. vFlag.Assign(target => [.. vFlag.Load(), Create(OpCodes.Ldc_I4_1), Create(OpCodes.Sub)]),
-                        Create(OpCodes.Br, loopFirst)
-                    ]));
-                }
-                else
-                {
-                    // .flag = 0;
-                    instructions.Add(vFlag.Assign(0));
-                    instructions.Add(loopFirst);
-                    // .if (flag < MO_ARRAY_LENGTH) { .. }
-                    instructions.Add(vFlag.Lt(rouMethod.Mos.Length).If(anchor => [
-                        // .moArray[flag].OnXxx(context);
-                        .. callingInsts,
-                        // flag += 1;
-                        .. vFlag.Assign(target => [.. vFlag.Load(), Create(OpCodes.Ldc_I4_1), Create(OpCodes.Add)]),
-                        Create(OpCodes.Br, loopFirst)
-                    ]));
-                }
+                // .mo.OnXxx(context);
+                instructions.Add(methodFactory(tMos[j]).Call(mHost, pContext));
             }
 
             return instructions;

@@ -1,302 +1,24 @@
-﻿using Fody;
-using Mono.Cecil;
-using Mono.Cecil.Cil;
-using Mono.Cecil.Rocks;
+﻿using Mono.Cecil;
 using Cecil.AspectN;
-using System;
 using System.Collections.Generic;
 using System.Linq;
+using Rougamo.Fody.Models;
 
 namespace Rougamo.Fody
 {
     internal static class ModelExtension
     {
-        #region Mo
-
-        #region Extract-Mo-Flags
-
-        public static AccessFlags ExtractFlags(this Mo mo)
-        {
-            var typeRef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_Flags, out var property))
-                {
-                    return (AccessFlags)Convert.ToInt32(property!.Value.Argument.Value);
-                }
-                typeRef = mo.Attribute.AttributeType;
-            }
-            var flags = ExtractFromIl(typeRef!, Constants.PROP_Flags, Constants.TYPE_AccessFlags, ParseFlags);
-            return flags ?? AccessFlags.InstancePublic;
-        }
-
-        private static AccessFlags? ParseFlags(Instruction instruction)
-        {
-            var opCode = instruction.OpCode;
-            if (opCode == OpCodes.Ldc_I4_3) return AccessFlags.Public;
-            if (opCode == OpCodes.Ldc_I4_6) return AccessFlags.Instance;
-            if (opCode == OpCodes.Ldc_I4_7) return AccessFlags.Instance | AccessFlags.Public;
-            if (opCode == OpCodes.Ldc_I4_S || opCode == OpCodes.Ldc_I4) return (AccessFlags)Convert.ToInt32(instruction.Operand);
-            return null;
-        }
-
-        #endregion Extract-Mo-Flags
-
-        #region Extract-Mo-Pattern
-
-        public static string? ExtractPattern(this Mo mo)
-        {
-            var typeRef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_Pattern, out var property))
-                {
-                    return (string)property!.Value.Argument.Value;
-                }
-                typeRef = mo.Attribute.AttributeType;
-            }
-            return ExtractFromIl(typeRef!, Constants.PROP_Pattern, Constants.TYPE_String, ParsePattern);
-        }
-
-        private static string? ParsePattern(Instruction instruction)
-        {
-            return instruction.OpCode.Code == Code.Ldstr ? (string)instruction.Operand : null;
-        }
-
-        #endregion Extract-Mo-Pattern
-
-        #region Extract-Mo-Features
-
-        public static Feature ExtractFeatures(this Mo mo)
-        {
-            var typeDef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_Features, out var property))
-                {
-                    return (Feature)Convert.ToInt32(property!.Value.Argument.Value);
-                }
-                typeDef = mo.Attribute.AttributeType.Resolve();
-            }
-            var features = ExtractFromIl(typeDef!, Constants.PROP_Features, Constants.TYPE_Feature, ParseFeatures);
-            return features ?? Feature.All;
-        }
-
-        private static Feature? ParseFeatures(Instruction instruction) => (Feature?)instruction.TryResolveInt32();
-
-        #endregion Extract-Mo-Features
-
-        #region Extract-Mo-Order
-
-        public static double ExtractOrder(this Mo mo)
-        {
-            var typeDef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_Order, out var property))
-                {
-                    return (double)property!.Value.Argument.Value;
-                }
-                typeDef = mo.Attribute.AttributeType.Resolve();
-            }
-            var order = ExtractFromIl(typeDef!, Constants.PROP_Order, Constants.TYPE_Double, ParseOrder);
-            return order ?? 0;
-        }
-
-        private static double? ParseOrder(Instruction instruction)
-        {
-            return instruction.OpCode.Code == Code.Ldc_R8 ? (double)instruction.Operand : null;
-        }
-
-        #endregion Extract-Mo-Order
-
-        #region Extract-Mo-MethodContextOmits
-
-        public static Omit ExtractOmits(this Mo mo)
-        {
-            var typeDef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_MethodContextOmits, out var property))
-                {
-                    return (Omit)Convert.ToInt32(property!.Value.Argument.Value);
-                }
-                typeDef = mo.Attribute.AttributeType.Resolve();
-            }
-            var flags = ExtractFromIl(typeDef!, Constants.PROP_MethodContextOmits, Constants.TYPE_Omit, ParseOmits);
-            return flags ?? Omit.None;
-        }
-
-        private static Omit? ParseOmits(Instruction instruction)
-        {
-            var opCode = instruction.OpCode;
-            if (opCode == OpCodes.Ldc_I4_0) return Omit.None;
-            if (opCode == OpCodes.Ldc_I4_1) return Omit.Mos;
-            if (opCode == OpCodes.Ldc_I4_2) return Omit.Arguments;
-            if (opCode == OpCodes.Ldc_I4_3) return Omit.Mos | Omit.Arguments;
-            if (opCode == OpCodes.Ldc_I4_4) return Omit.ReturnValue;
-            if (opCode == OpCodes.Ldc_I4_5) return Omit.Mos | Omit.ReturnValue;
-            if (opCode == OpCodes.Ldc_I4_6) return Omit.Arguments | Omit.ReturnValue;
-            if (opCode == OpCodes.Ldc_I4_7) return Omit.All;
-            return null;
-        }
-
-        #endregion Extract-Mo-MethodContextOmits
-
-        #region Extract-Mo-ForceSync
-
-        public static ForceSync ExtractForceSync(this Mo mo)
-        {
-            var typeRef = mo.TypeRef;
-            if (mo.Attribute != null)
-            {
-                if (mo.Attribute.Properties.TryGet(Constants.PROP_ForceSync, out var property))
-                {
-                    return (ForceSync)Convert.ToInt32(property!.Value.Argument.Value);
-                }
-                typeRef = mo.Attribute.AttributeType;
-            }
-            var flags = ExtractFromIl(typeRef!, Constants.PROP_ForceSync, Constants.TYPE_ForceSync, ParseForceSync);
-            return flags ?? ForceSync.None;
-        }
-
-        private static ForceSync? ParseForceSync(Instruction instruction)
-        {
-            var opCode = instruction.OpCode;
-            if (opCode == OpCodes.Ldc_I4_0) return ForceSync.None;
-            if (opCode == OpCodes.Ldc_I4_1) return ForceSync.OnEntry;
-            if (opCode == OpCodes.Ldc_I4_2) return ForceSync.OnSuccess;
-            if (opCode == OpCodes.Ldc_I4_3) return ForceSync.OnEntry | ForceSync.OnSuccess;
-            if (opCode == OpCodes.Ldc_I4_4) return ForceSync.OnException;
-            if (opCode == OpCodes.Ldc_I4_5) return ForceSync.OnEntry | ForceSync.OnException;
-            if (opCode == OpCodes.Ldc_I4_6) return ForceSync.OnSuccess | ForceSync.OnException;
-            if (opCode == OpCodes.Ldc_I4_7) return ForceSync.OnEntry | ForceSync.OnSuccess | ForceSync.OnException;
-            if (opCode == OpCodes.Ldc_I4_8) return ForceSync.OnExit;
-            if (opCode == OpCodes.Ldc_I4_S || opCode == OpCodes.Ldc_I4) return (ForceSync)Convert.ToInt32(instruction.Operand);
-            return null;
-        }
-
-        #endregion Extract-Mo-ForceSync
-
-        #region Extract-Property-Value
-
-        private static T? ExtractFromIl<T>(TypeReference typeRef, string propertyName, string propertyTypeFullName, Func<Instruction, T?> tryResolve) where T : struct
-        {
-            return ExtractFromProp(typeRef, propertyName, tryResolve) ??
-                ExtractFromCtor(typeRef, propertyTypeFullName, propertyName, tryResolve);
-        }
-
-        private static T? ExtractFromProp<T>(TypeReference typeRef, string propName, Func<Instruction, T?> tryResolve) where T : struct
-        {
-            var typeDef = typeRef.Resolve();
-            while (typeDef != null)
-            {
-                var property = typeDef.Properties.FirstOrDefault(prop => prop.Name == propName);
-                if (property != null)
-                {
-                    var instructions = property.GetMethod.Body.Instructions;
-                    for (int i = instructions.Count - 1; i >= 0; i--)
-                    {
-                        var value = tryResolve(instructions[i]);
-                        if (value.HasValue) return value.Value;
-                    }
-                    // 一旦在类定义中找到了属性定义，即使没有查找到对应初始化代码，也没有必要继续往父类查找了
-                    // 因为已经override的属性，父类的赋值操作没有意义，直接进行后续的构造方法查找即可
-                    return null;
-                }
-                typeDef = typeDef.BaseType?.Resolve();
-            }
-            return null;
-        }
-
-        private static T? ExtractFromCtor<T>(TypeReference typeRef, string propTypeFullName, string propertyName, Func<Instruction, T?> tryResolve) where T : struct
-        {
-            var propFieldName = string.Format(Constants.FIELD_Format, propertyName);
-            var setterName = Constants.Setter(propertyName);
-            var typeDef = typeRef.Resolve();
-            while (typeDef != null)
-            {
-                var nonCtor = typeDef.GetConstructors().FirstOrDefault(ctor => !ctor.HasParameters);
-                if (nonCtor != null)
-                {
-                    foreach (var instruction in nonCtor.Body.Instructions)
-                    {
-                        if (instruction.IsStfld(propFieldName, propTypeFullName) || instruction.IsCallAny(setterName))
-                        {
-                            return tryResolve(instruction.Previous);
-                        }
-                    }
-                }
-                typeDef = typeDef.BaseType?.Resolve();
-            }
-            return null;
-        }
-
-        private static T? ExtractFromIl<T>(TypeReference typeRef, string propertyName, string propertyTypeFullName, Func<Instruction, T?> tryResolve) where T : class
-        {
-            return ExtractFromProp(typeRef, propertyName, tryResolve) ??
-                ExtractFromCtor(typeRef, propertyTypeFullName, propertyName, tryResolve);
-        }
-
-        private static T? ExtractFromProp<T>(TypeReference typeRef, string propName, Func<Instruction, T?> tryResolve) where T : class
-        {
-            var typeDef = typeRef.Resolve();
-            while (typeDef != null)
-            {
-                var property = typeDef.Properties.FirstOrDefault(prop => prop.Name == propName);
-                if (property != null)
-                {
-                    var instructions = property.GetMethod.Body.Instructions;
-                    for (int i = instructions.Count - 1; i >= 0; i--)
-                    {
-                        var value = tryResolve(instructions[i]);
-                        if (value != null) return value;
-                    }
-                    // 一旦在类定义中找到了属性定义，即使没有查找到对应初始化代码，也没有必要继续往父类查找了
-                    // 因为已经override的属性，父类的赋值操作没有意义，直接进行后续的构造方法查找即可
-                    return null;
-                }
-                typeDef = typeDef.BaseType?.Resolve();
-            }
-            return null;
-        }
-
-        private static T? ExtractFromCtor<T>(TypeReference typeRef, string propTypeFullName, string propertyName, Func<Instruction, T?> tryResolve) where T : class
-        {
-            var propFieldName = string.Format(Constants.FIELD_Format, propertyName);
-            var setterName = Constants.Setter(propertyName);
-            var typeDef = typeRef.Resolve();
-            while (typeDef != null)
-            {
-                var nonCtor = typeDef.GetConstructors().FirstOrDefault(ctor => !ctor.HasParameters);
-                if (nonCtor != null)
-                {
-                    foreach (var instruction in nonCtor.Body.Instructions)
-                    {
-                        if (instruction.IsStfld(propFieldName, propTypeFullName) || instruction.IsCallAny(setterName))
-                        {
-                            return tryResolve(instruction.Previous);
-                        }
-                    }
-                }
-                typeDef = typeDef.BaseType?.Resolve();
-            }
-            return null;
-        }
-
-        #endregion Extract-Property-Value
-
         public static void Initialize(this RouType rouType, MethodDefinition methdDef,
-            CustomAttribute[] assemblyAttributes, TypeReference[] assemblyGenerics,
+            ConfiguredMo[] configuredMos, CustomAttribute[] assemblyAttributes, TypeReference[] assemblyGenerics,
             RepulsionMo[] typeImplements, CustomAttribute[] typeAttributes, TypeReference[] typeGenerics, TypeReference[] typeProxies,
             CustomAttribute[] methodAttributes, TypeReference[] methodGenerics, TypeReference[] methodProxies,
-            string[] assemblyIgnores, string[] typeIgnores, string[] methodIgnores, bool compositeAccessibility)
+            string[] assemblyIgnores, string[] typeIgnores, string[] methodIgnores, bool compositeAccessibility, bool skipRefStruct)
         {
             var ignores = new HashSet<string>(assemblyIgnores);
             ignores.AddRange(typeIgnores);
             ignores.AddRange(methodIgnores);
 
-            var rouMethod = new RouMethod(rouType, methdDef);
+            var rouMethod = new RouMethod(rouType, methdDef, skipRefStruct);
 
             rouMethod.AddMo(methodAttributes.Where(x => !ignores.Contains(x.AttributeType.FullName)), MoFrom.Method, compositeAccessibility);
             rouMethod.AddMo(methodGenerics.Where(x => !ignores.Contains(x.FullName)), MoFrom.Method, compositeAccessibility);
@@ -316,6 +38,7 @@ namespace Rougamo.Fody
 
             rouMethod.AddMo(assemblyAttributes.Where(x => !ignores.Contains(x.AttributeType.FullName)), MoFrom.Assembly, compositeAccessibility);
             rouMethod.AddMo(assemblyGenerics.Where(x => !ignores.Contains(x.FullName)), MoFrom.Assembly, compositeAccessibility);
+            rouMethod.AddMo(configuredMos.Where(x => MatchMo(rouMethod, x, MoFrom.Assembly, compositeAccessibility)));
 
             if (rouMethod.MosAny())
             {
@@ -327,13 +50,13 @@ namespace Rougamo.Fody
 
         public static void AddMo(this RouMethod method, IEnumerable<CustomAttribute> attributes, MoFrom from, bool compositeAccessibility)
         {
-            var mos = attributes.Select(x => new Mo(x, from)).Where(x => MatchMo(method, x, from, compositeAccessibility));
+            var mos = attributes.Select(x => new CustomAttributeMo(x, from)).Where(x => MatchMo(method, x, from, compositeAccessibility));
             method.AddMo(mos);
         }
 
         public static void AddMo(this RouMethod method, IEnumerable<TypeReference> typeRefs, MoFrom from, bool compositeAccessibility)
         {
-            var mos = typeRefs.Select(x => new Mo(x, from)).Where(x => MatchMo(method, x, from, compositeAccessibility));
+            var mos = typeRefs.Select(x => new TypeReferenceMo(x, from)).Where(x => MatchMo(method, x, from, compositeAccessibility));
             method.AddMo(mos);
         }
 
@@ -374,7 +97,5 @@ namespace Rougamo.Fody
         {
             return typeRefs.Any(method.Any);
         }
-
-        #endregion Mo
     }
 }

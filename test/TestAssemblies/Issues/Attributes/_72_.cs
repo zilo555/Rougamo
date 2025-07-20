@@ -1,25 +1,19 @@
 ﻿using Rougamo;
 using Rougamo.Context;
+using Rougamo.Flexibility;
+using Rougamo.Metadatas;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Issues.Attributes
 {
-    public struct _72_ : IMo
+    [Advice(Feature.OnEntry)]
+    [Pointcut(AccessFlags.All)]
+    public struct _72_ : IMo, IFlexibleOrderable
     {
         public _72_() { }
 
-        public AccessFlags Flags { get; } = AccessFlags.All;
-
-        public string Pattern { get; } = null;
-
-        public Feature Features { get; } = Feature.OnEntry;
-
-        public double Order { get; } = 1;
-
-        public Omit MethodContextOmits { get; } = Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
+        public double Order { get; set; } = 1;
 
         public void OnEntry(MethodContext context)
         {

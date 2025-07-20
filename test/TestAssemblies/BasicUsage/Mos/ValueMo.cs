@@ -1,23 +1,15 @@
 ﻿using Rougamo;
 using Rougamo.Context;
+using Rougamo.Flexibility;
+using Rougamo.Metadatas;
 using System.Threading.Tasks;
 
 namespace BasicUsage.Mos
 {
+    [Advice(Feature.OnEntry)]
+    [Pointcut(AccessFlags.All)]
     public struct ValueMo : IMo
     {
-        public AccessFlags Flags => AccessFlags.All;
-
-        public string Pattern => null;
-
-        public Feature Features => Feature.OnEntry;
-
-        public double Order => 1;
-
-        public Omit MethodContextOmits => Omit.None;
-
-        public ForceSync ForceSync => ForceSync.None;
-
         public void OnEntry(MethodContext context)
         {
             this.SetOnEntry(context);
