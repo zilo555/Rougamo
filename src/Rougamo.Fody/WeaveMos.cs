@@ -1,4 +1,4 @@
-﻿using Fody;
+using Fody;
 using Fody.Simulations;
 using Fody.Simulations.PlainValues;
 using Mono.Cecil;
@@ -37,7 +37,14 @@ namespace Rougamo.Fody
                         }
                         else if (rouMethod.IsAsyncTaskOrValueTask)
                         {
-                            WeavingAsyncTaskMethod(rouMethod);
+                            if (HasGetAwaiter(rouMethod.MethodDef.ReturnType))
+                            {
+                                WeavingAsyncTaskMethod(rouMethod);
+                            }
+                            else
+                            {
+                                WeavingSyncMethod(rouMethod);
+                            }
                         }
                         else if (!rouMethod.MethodDef.IsConstructor)
                         {
@@ -59,6 +66,50 @@ namespace Rougamo.Fody
                     }
                 }
             }
+        }
+
+
+        private bool HasGetAwaiter(TypeReference returnType)
+        {
+            try
+            {
+                return returnType.Resolve()?.Methods.Any(m => m.Name == Constants.METHOD_GetAwaiter) == true;
+            }
+            catch (Exception ex)
+            {
+                WriteWarning($"Unable to resolve {returnType} when checking GetAwaiter, treat as not having GetAwaiter: {ex.Message}");
+                return false;
+            }
+        }
+
+        private FieldDefinition? ResolveDeclaringThisField(TypeDefinition stateMachineTypeDef)
+        {
+            // Unity 的 IL 编译器会为状态机生成多个类型与外部类相同的字段（例如一个 this 字段和一个名为 xxxwrap 的包装字段），
+            // 直接使用 Single/SingleOrDefault 会抛异常。这里按名称过滤掉包含 "wrap" 的字段后取第一个匹配项。
+            var candidates = stateMachineTypeDef.Fields
+                .Where(fieldDef =>
+                {
+                    try
+                    {
+                        var matched = fieldDef.FieldType.Resolve() == stateMachineTypeDef.DeclaringType;
+                        if (!matched) return false;
+
+                        return fieldDef.Name.IndexOf("wrap", StringComparison.OrdinalIgnoreCase) < 0;
+                    }
+                    catch (Exception ex)
+                    {
+                        WriteWarning($"Unable to resolve field {fieldDef} when resolving declaring this: {ex.Message}");
+                        return false;
+                    }
+                })
+                .ToArray();
+
+            if (candidates.Length > 1)
+            {
+                WriteWarning($"State machine {stateMachineTypeDef} has multiple declaring-this candidates: {string.Join(", ", candidates.Select(c => c.Name))}, use the first one.");
+            }
+
+            return candidates.FirstOrDefault();
         }
 
         private IList<Instruction> NewMo(RouMethod rouMethod, Mo mo, TsMo tMo, MethodSimulation executingMethod, List<IParameterSimulation> pooledItems)
