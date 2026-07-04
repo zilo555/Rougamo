@@ -55,22 +55,22 @@ namespace Rougamo.Fody
             var tStateMachine = stateMachineTypeDef.MakeReference().Simulate<TsAsyncStateMachine>(this).SetFields(fields);
             var mActualMethod = StateMachineResolveActualMethod<TsAwaitable>(tStateMachine, actualMethodDef);
             if (buildSetStateMachine) AsyncBuildSetStateMachine(tStateMachine);
-            AsyncBuildMoveNext(rouMethod, tStateMachine, mActualMethod);
+            AsyncBuildMoveNext(rouMethod, tStateMachine, mActualMethod, stateMachineTypeDef);
         }
 
-        private void AsyncBuildMoveNext(RouMethod rouMethod, TsAsyncStateMachine tStateMachine, MethodSimulation<TsAwaitable> mActualMethod)
+        private void AsyncBuildMoveNext(RouMethod rouMethod, TsAsyncStateMachine tStateMachine, MethodSimulation<TsAwaitable> mActualMethod, TypeDefinition stateMachineTypeDef)
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             mMoveNext.Def.Clear();
 
-            AsyncBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod);
+            AsyncBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod, stateMachineTypeDef);
             StackTraceHidden(mMoveNext.Def);
             DebuggerStepThrough(mMoveNext.Def);
             mMoveNext.Def.Body.InitLocals = true;
             mMoveNext.Def.Body.OptimizePlus();
         }
 
-        private void AsyncBuildMosMoveNext(RouMethod rouMethod, TsAsyncStateMachine tStateMachine, MethodSimulation<TsAwaitable> mActualMethod)
+        private void AsyncBuildMosMoveNext(RouMethod rouMethod, TsAsyncStateMachine tStateMachine, MethodSimulation<TsAwaitable> mActualMethod, TypeDefinition stateMachineTypeDef)
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             var instructions = mMoveNext.Def.Body.Instructions;
@@ -106,7 +106,7 @@ namespace Rougamo.Fody
                         // ._mo = new Mo1Attribute(..);
                         instructions.Add(StateMachineInitMos(rouMethod, tStateMachine, pooledItems));
                         // ._context = new MethodContext(..);
-                        instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine));
+                        instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine, stateMachineTypeDef));
                         // ._mo.OnEntry(_context); <--> _mo.OnEntryAsync(_context).GetAwaiter()...
                         instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnEntry, ForceSync.OnEntry, fMo => fMo.Value.M_OnEntry, fMo => fMo.Value.M_OnEntryAsync));
 
@@ -303,7 +303,7 @@ namespace Rougamo.Fody
             return instructions;
         }
 
-        private IList<Instruction> StateMachineInitMethodContext(RouMethod rouMethod, TsStateMachine tStateMachine)
+        private IList<Instruction> StateMachineInitMethodContext(RouMethod rouMethod, TsStateMachine tStateMachine, TypeDefinition stateMachineTypeDef)
         {
             var instructions = new List<Instruction>();
 
@@ -323,7 +323,7 @@ namespace Rougamo.Fody
             // ._context.TargetType = typeof(TARGET_TYPE);
             instructions.AddRange(tStateMachine.F_MethodContext.Value.P_TargetType.Assign(new SystemType(rouMethod.MethodDef.DeclaringType, this)));
             // ._context.Method = methodof(TARGET_METHOD);
-            instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, this)));
+            instructions.AddRange(tStateMachine.F_MethodContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, stateMachineTypeDef, this)));
             // ._context.Arguments = new object[] { ... };
             if (!rouMethod.MethodContextOmits.Contains(Omit.Arguments))
             {

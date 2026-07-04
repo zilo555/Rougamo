@@ -14,6 +14,7 @@ namespace Rougamo.Context
     {
         private Type? _taskReturnType;
         private IDictionary? _datas;
+        private MethodBase _method = null!;
 
         /// <summary>
         /// User-defined state data.
@@ -41,7 +42,22 @@ namespace Rougamo.Context
         /// Current method information.
         /// </summary>
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
-        public MethodBase Method { get; set; } = null!;
+        public MethodBase Method
+        {
+            get
+            {
+                // 织入 async/iterator 状态机时，对泛型方法使用的是已实例化 token（GenericInstanceMethod），
+                // 否则 Mono JIT 在 MoveNext 中会断言失败。但 MethodBase.Name 对构造后的泛型方法
+                // 不会包含反引号（如 GenericEnumerator 而非 GenericEnumerator`1），为保证语义一致，
+                // 这里统一返回泛型方法定义。
+                if (_method is MethodInfo methodInfo && methodInfo.IsGenericMethod && !methodInfo.IsGenericMethodDefinition)
+                {
+                    return methodInfo.GetGenericMethodDefinition();
+                }
+                return _method;
+            }
+            set => _method = value;
+        }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
         /// <summary>

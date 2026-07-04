@@ -195,7 +195,7 @@ namespace Rougamo.Fody
             // .context.TargeType = typeof(TARGET_TYPE);
             instructions.AddRange(vContext.Value.P_TargetType.Assign(new SystemType(rouMethod.MethodDef.DeclaringType, this)));
             // .context.Method = methodof(TARGET_METHOD);
-            instructions.AddRange(vContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, this)));
+            instructions.AddRange(vContext.Value.P_Method.Assign(new SystemMethodBase(rouMethod.MethodDef, null, this)));
             // .context.Arguments = new object[] { ... };
             if (!rouMethod.MethodContextOmits.Contains(Omit.Arguments))
             {

@@ -40,28 +40,28 @@ namespace Rougamo.Fody
             if (isEnumerator)
             {
                 var mActualMethod = StateMachineResolveActualMethod<TsAsyncEnumerator>(tStateMachine, actualMethodDef);
-                AiteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod);
+                AiteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, stateMachineTypeDef);
             }
             else
             {
                 var mActualMethod = StateMachineResolveActualMethod<TsAsyncEnumerable>(tStateMachine, actualMethodDef);
-                AiteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod);
+                AiteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, stateMachineTypeDef);
             }
         }
 
-        private void AiteratorBuildMoveNext<TAiterator>(RouMethod rouMethod, TsAsyncIteratorStateMachine tStateMachine, MethodSimulation<TAiterator> mActualMethod) where TAiterator : TypeSimulation
+        private void AiteratorBuildMoveNext<TAiterator>(RouMethod rouMethod, TsAsyncIteratorStateMachine tStateMachine, MethodSimulation<TAiterator> mActualMethod, TypeDefinition stateMachineTypeDef) where TAiterator : TypeSimulation
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             mMoveNext.Def.Clear();
 
-            AiteratorBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod);
+            AiteratorBuildMosMoveNext(rouMethod, tStateMachine, mActualMethod, stateMachineTypeDef);
             StackTraceHidden(mMoveNext.Def);
             DebuggerStepThrough(mMoveNext.Def);
             mMoveNext.Def.Body.InitLocals = true;
             mMoveNext.Def.Body.OptimizePlus();
         }
 
-        private void AiteratorBuildMosMoveNext<TAiterator>(RouMethod rouMethod, TsAsyncIteratorStateMachine tStateMachine, MethodSimulation<TAiterator> mActualMethod) where TAiterator : TypeSimulation
+        private void AiteratorBuildMosMoveNext<TAiterator>(RouMethod rouMethod, TsAsyncIteratorStateMachine tStateMachine, MethodSimulation<TAiterator> mActualMethod, TypeDefinition stateMachineTypeDef) where TAiterator : TypeSimulation
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             var instructions = mMoveNext.Def.Body.Instructions;
@@ -120,7 +120,7 @@ namespace Rougamo.Fody
                             // ._mo = new Mo1Attribute(..);
                             instructions.Add(StateMachineInitMos(rouMethod, tStateMachine, pooledItems));
                             // ._context = new MethodContext(..);
-                            instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine));
+                            instructions.Add(StateMachineInitMethodContext(rouMethod, tStateMachine, stateMachineTypeDef));
                             // ._mo.OnEntryAsync(context).GetAwaiater(); ...
                             instructions.Add(AsyncMosOn(rouMethod, tStateMachine, vMoValueTask, vMoAwaiter, vState, context, Feature.OnEntry, ForceSync.OnEntry, fMo => fMo.Value.M_OnEntry, fMo => fMo.Value.M_OnEntryAsync));
                             // .if (_context.RewriteArguments) { ... }

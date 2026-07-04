@@ -43,22 +43,22 @@ namespace Rougamo.Fody
             if (isEnumerator)
             {
                 var mActualMethod = StateMachineResolveActualMethod<TsEnumerator>(tStateMachine, actualMethodDef);
-                IteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, pooledItems);
+                IteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, pooledItems, stateMachineTypeDef);
             }
             else
             {
                 var mActualMethod = StateMachineResolveActualMethod<TsEnumerable>(tStateMachine, actualMethodDef);
-                IteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, pooledItems);
+                IteratorBuildMoveNext(rouMethod, tStateMachine, mActualMethod, pooledItems, stateMachineTypeDef);
             }
             IteratorBuildDispose(rouMethod, tStateMachine, pooledItems);
         }
 
-        private void IteratorBuildMoveNext<TIterator>(RouMethod rouMethod, TsIteratorStateMachine tStateMachine, MethodSimulation<TIterator> mActualMethod, List<IParameterSimulation> pooledItems) where TIterator : TypeSimulation
+        private void IteratorBuildMoveNext<TIterator>(RouMethod rouMethod, TsIteratorStateMachine tStateMachine, MethodSimulation<TIterator> mActualMethod, List<IParameterSimulation> pooledItems, TypeDefinition stateMachineTypeDef) where TIterator : TypeSimulation
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             mMoveNext.Def.Clear();
 
-            IteratorBuildMoveNextInternal(rouMethod, tStateMachine, mActualMethod, pooledItems);
+            IteratorBuildMoveNextInternal(rouMethod, tStateMachine, mActualMethod, pooledItems, stateMachineTypeDef);
 
             StackTraceHidden(mMoveNext.Def);
             DebuggerStepThrough(mMoveNext.Def);
@@ -66,7 +66,7 @@ namespace Rougamo.Fody
             mMoveNext.Def.Body.OptimizePlus();
         }
 
-        private void IteratorBuildMoveNextInternal<TIterator>(RouMethod rouMethod, TsIteratorStateMachine tStateMachine, MethodSimulation<TIterator> mActualMethod, List<IParameterSimulation> pooledItems) where TIterator : TypeSimulation
+        private void IteratorBuildMoveNextInternal<TIterator>(RouMethod rouMethod, TsIteratorStateMachine tStateMachine, MethodSimulation<TIterator> mActualMethod, List<IParameterSimulation> pooledItems, TypeDefinition stateMachineTypeDef) where TIterator : TypeSimulation
         {
             var mMoveNext = tStateMachine.M_MoveNext;
             var instructions = mMoveNext.Def.Body.Instructions;
@@ -91,7 +91,7 @@ namespace Rougamo.Fody
                     // ._mo = new Mo1Attribute(..);
                     .. StateMachineInitMos(rouMethod, tStateMachine, pooledItems),
                     // ._context = new MethodContext(..);
-                    .. StateMachineInitMethodContext(rouMethod, tStateMachine),
+                    .. StateMachineInitMethodContext(rouMethod, tStateMachine, stateMachineTypeDef),
                     // ._mo.OnEntry(_context);
                     .. StateMachineSyncMosNo(rouMethod, tStateMachine, Feature.OnEntry, mo => mo.M_OnEntry),
                     // .if (_context.RewriteArguments) { .. }
