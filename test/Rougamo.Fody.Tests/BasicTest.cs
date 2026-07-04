@@ -770,5 +770,28 @@ namespace Rougamo.Fody.Tests
             Assert.Equal(2, list.Count);
             Assert.Same(list[0], list[1]);
         }
+
+        [Fact]
+        public async Task TypeForwardedTypesTest()
+        {
+            var instance = Assembly.GetInstance(nameof(TypeForwardedTypes));
+            var logs = new List<string>();
+
+            await (ValueTask)instance.ValueTaskAsync(logs);
+            Assert.Equal(["OnEntry", "ValueTaskAsync", "OnSuccess", "OnExit"], logs);
+            logs.Clear();
+
+            var asyncEnumerable = (IAsyncEnumerable<int>)instance.AsyncEnumerable(logs);
+            await foreach (var item in asyncEnumerable) ;
+            Assert.Equal(["OnEntry", "AsyncEnumerable", "OnSuccess", "OnExit"], logs);
+            logs.Clear();
+
+            object rawInstance = Assembly.GetInstance(nameof(TypeForwardedTypes), false);
+            TypeForwardedTypes.ReadOnlySpanInDelegate readOnlySpanIn = Assembly.GetMethodDelegate<TypeForwardedTypes.ReadOnlySpanInDelegate>(rawInstance, nameof(TypeForwardedTypes.ReadOnlySpanIn));
+            var pIn = new ReadOnlySpan<char>("abc".ToCharArray());
+            var str = readOnlySpanIn(logs, pIn);
+            Assert.Equal(pIn.ToString(), str);
+            Assert.Equal(["OnEntry", "OnSuccess", "OnExit"], logs);
+        }
     }
 }

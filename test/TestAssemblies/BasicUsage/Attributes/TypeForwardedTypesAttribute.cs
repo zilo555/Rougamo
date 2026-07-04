@@ -2,9 +2,9 @@ using Rougamo;
 using Rougamo.Context;
 using System.Collections.Generic;
 
-namespace Issues.Attributes;
+namespace BasicUsage.Attributes;
 
-public class _TypeForwardedTypes_Attribute : MoAttribute
+public class TypeForwardedTypesAttribute : MoAttribute
 {
     public override void OnEntry(MethodContext context)
     {
