@@ -331,3 +331,10 @@ ASALocalRun/
 
 # Generated mono mirror tests
 /test/Rougamo.Fody.Tests/Mono48/Mono48MirrorTests.g.cs
+
+# OpenCode local workspace data
+.omo/
+
+# Memorix local cache
+local_cache/
+
