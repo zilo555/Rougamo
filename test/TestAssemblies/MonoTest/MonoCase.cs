@@ -1,13 +1,16 @@
 using Rougamo;
 using Rougamo.Context;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace MonoTest;
 
 public class MonoMoAttribute : MoAttribute
+{
+}
+
+public class MonoStateMachineMoAttribute : MoAttribute
 {
     public override void OnEntry(MethodContext context)
     {
@@ -50,7 +53,7 @@ public class MonoCase<T>
     }
 
     // 泛型类型中的非泛型 async 方法，验证 Mono JIT 对状态机 method token 的处理
-    [MonoMo]
+    [MonoStateMachineMo]
     public async Task<int> AsyncMethod(List<string> logs)
     {
         await Task.Yield();
@@ -58,7 +61,7 @@ public class MonoCase<T>
     }
 
     // 泛型类型中的非泛型 iterator 方法
-    [MonoMo]
+    [MonoStateMachineMo]
     public IEnumerator<int> IteratorMethod(List<string> logs)
     {
         yield return 1;
@@ -67,7 +70,7 @@ public class MonoCase<T>
     }
 
     // 泛型类型中的非泛型 async iterator 方法
-    [MonoMo]
+    [MonoStateMachineMo]
     public async IAsyncEnumerator<int> AsyncIteratorMethod(List<string> logs)
     {
         await Task.Yield();
